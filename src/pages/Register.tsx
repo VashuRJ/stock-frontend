@@ -2,8 +2,6 @@ import { useState } from 'react'
 import { api } from '@/api/client'
 import { useNavigate } from 'react-router-dom'
 
-const VITE_API_BASE = import.meta.env.VITE_API_BASE;
-
 export default function Register() {
   const [formData, setFormData] = useState({
     full_name: '',
@@ -57,7 +55,8 @@ export default function Register() {
         country: formData.country
       }
 
-      await api.post(`${VITE_API_BASE}/auth/register`, registerData)
+      // Call backend registration endpoint
+      await api.post('/create', registerData)
       setSuccess(true)
       
       // Redirect to login after 2 seconds
@@ -88,7 +87,7 @@ export default function Register() {
       {/* --- RIGHT SIDE: REGISTRATION FORM --- */}
       <div className="w-full lg:w-1/2 flex items-center justify-center p-8 relative bg-[#0e1117]">
         
-        <div className="w-full max-w-sm space-y-6">
+        <div className="w-full max-w-lg space-y-6">
           
           {/* Brand Header */}
           <div className="text-center">
@@ -99,7 +98,6 @@ export default function Register() {
                   className="w-21 h-20 object-contain" 
                 />
             </div>
-            <p className="text-[#787b86] mt-2 text-sm">Create Your Trading Account</p>
           </div>
 
           <div className="bg-[#131722] p-8 rounded-2xl border border-[#2a2e39] shadow-2xl">
@@ -162,10 +160,6 @@ export default function Register() {
                   className="w-full bg-[#0e1117] border border-[#2a2e39] text-white text-sm rounded-lg focus:ring-1 focus:ring-[#2962ff] focus:border-[#2962ff] p-3 transition-all focus:outline-none"
                 >
                   <option value="IN">India</option>
-                  <option value="US">United States</option>
-                  <option value="UK">United Kingdom</option>
-                  <option value="CA">Canada</option>
-                  <option value="AU">Australia</option>
                 </select>
               </div>
 

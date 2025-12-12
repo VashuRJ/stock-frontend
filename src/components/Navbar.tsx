@@ -1,8 +1,26 @@
-import React from 'react'
+import React, { useState, useEffect } from 'react'
 import { Link, NavLink, useNavigate } from 'react-router-dom'
+import { LogOut, User } from 'lucide-react'
 
 export default function Navbar() {
   const navigate = useNavigate()
+  const [isLoggedIn, setIsLoggedIn] = useState(false)
+  const [userName, setUserName] = useState('')
+
+  useEffect(() => {
+    const token = localStorage.getItem('access_token')
+    const storedName = localStorage.getItem('user_name') || 'User'
+    setIsLoggedIn(!!token)
+    setUserName(storedName)
+  }, [])
+
+  const handleLogout = () => {
+    localStorage.removeItem('access_token')
+    localStorage.removeItem('user_name')
+    setIsLoggedIn(false)
+    // Force full reload to home to avoid any stale auth state
+    window.location.href = '/'
+  }
 
   return (
     <>
@@ -60,28 +78,46 @@ export default function Navbar() {
               </nav>
 
               {/* User Menu Section */}
-              <div className="flex items-center gap-3 border-l border-[#2a2e39] pl-6">
+              <div className="flex items-center gap-3 border-l border-[#c43838] pl-6">
                 
-                {/* Country/Region Indicator */}
-                <span className="hidden sm:flex items-center gap-1 text-xs font-medium text-[#787b86] cursor-pointer hover:text-[#d1d4dc]">
-                  <span>🌐</span> IN
-                </span>
+               
 
-                {/* Sign In Button (Icon for Mobile) */}
-                <button 
-                  onClick={() => navigate('/login')}
-                  className="sm:hidden p-2 text-[#d1d4dc] hover:bg-[#2a2e39] rounded-full"
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-3.31 0-6 2.69-6 6h12c0-3.31-2.69-6-6-6z"/></svg>
-                </button>
-
-                {/* Sign In Button (Full for Desktop) */}
-                <button
-                  onClick={() => navigate('/login')}
-                  className="hidden sm:flex items-center justify-center h-8 px-4 rounded bg-[#2962ff] hover:bg-[#1e53e5] text-white text-sm font-semibold transition-colors"
-                >
-                  Sign In
-                </button>
+                {isLoggedIn ? (
+                  /* Logged In: Show Profile & Logout */
+                  <>
+                    <div className="flex items-center gap-3">
+                      <div className="text-right hidden sm:block">
+                      
+                      </div>
+                      <div className="h-9 w-9 rounded-full bg-gradient-to-tr from-[#2962ff] to-purple-600 border-2 border-[#131722] flex items-center justify-center text-white font-bold text-sm">
+                        {userName.charAt(0).toUpperCase()}
+                      </div>
+                    </div>
+                    <button 
+                      onClick={handleLogout}
+                      className="p-2 text-[#f23645] hover:bg-[#f23645]/10 rounded-lg transition-colors"
+                      title="Logout"
+                    >
+                      <LogOut size={18} />
+                    </button>
+                  </>
+                ) : (
+                  /* Not Logged In: Show Sign In Button */
+                  <>
+                    <button 
+                      onClick={() => navigate('/login')}
+                      className="sm:hidden p-2 text-[#d1d4dc] hover:bg-[#2a2e39] rounded-full"
+                    >
+                      <User size={20} />
+                    </button>
+                    <button
+                      onClick={() => navigate('/login')}
+                      className="hidden sm:flex items-center justify-center h-8 px-4 rounded bg-[#2962ff] hover:bg-[#1e53e5] text-white text-sm font-semibold transition-colors"
+                    >
+                      Sign In
+                    </button>
+                  </>
+                )}
               </div>
 
             </div>

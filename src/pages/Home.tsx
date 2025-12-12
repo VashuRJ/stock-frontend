@@ -270,9 +270,6 @@ export default function Home() {
       </section>
 
       {/* --- FOOTER --- */}
-      <footer className="bg-[#0e1117] border-t border-[#2a2e39] py-12 text-center">
-        <p className="text-[#787b86] text-sm">© 2025 ConcienTech Stock Platform. Built for Traders.</p>
-      </footer>
     </div>
   )
 }

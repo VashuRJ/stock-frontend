@@ -1,5 +1,6 @@
 import { Route, Routes, Navigate, useLocation } from 'react-router-dom'
 import Navbar from '@/components/Navbar'
+import { Footer } from '@/components/Fotter'
 import Home from '@/pages/Home'
 import Login from '@/pages/Login'
 import Register from '@/pages/Register'
@@ -22,6 +23,7 @@ export default function App() {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>
+      <Footer />
     </div>
   )
 }

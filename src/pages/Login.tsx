@@ -2,8 +2,6 @@ import { useState } from 'react'
 import { api } from '@/api/client'
 import { useNavigate } from 'react-router-dom'
 
-const VITE_API_BASE = import.meta.env.VITE_API_BASE;
-
 export default function Login() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -16,9 +14,16 @@ export default function Login() {
     setError(null)
     setLoading(true)
     try {
-      const res = await api.post(`${VITE_API_BASE}/auth/login`, { email, password })
-      const { access_token } = res.data
+      const res = await api.post('/auth/login', { email, password })
+      const { access_token, user } = res.data
+      
+      // Save to localStorage
       localStorage.setItem('access_token', access_token)
+      localStorage.setItem('user_id', user.id?.toString() || '')
+      localStorage.setItem('user_name', user.full_name || email.split('@')[0])
+      localStorage.setItem('user_email', user.email || '')
+      
+      // Redirect to dashboard
       navigate('/dashboard')
     } catch (err: any) {
       setError(err?.response?.data?.detail || 'Invalid credentials. Please try again.')
@@ -30,7 +35,7 @@ export default function Login() {
   return (
     <div className="min-h-screen flex bg-[#0e1117] text-[#d1d4dc] font-sans selection:bg-[#2962ff] selection:text-white">
       
-      {/* --- LEFT SIDE: PURE PREMIUM IMAGE --- */}
+      {/* --- LEFT SIDE: PREMIUM IMAGE --- */}
       <div className="hidden lg:block w-1/2 relative overflow-hidden">
         <div 
           className="absolute inset-0 bg-cover bg-center transition-transform duration-[40s] ease-in-out transform hover:scale-110"
@@ -44,7 +49,7 @@ export default function Login() {
       {/* --- RIGHT SIDE: LOGIN FORM --- */}
       <div className="w-full lg:w-1/2 flex items-center justify-center p-8 relative bg-[#0e1117]">
         
-        <div className="w-full max-w-sm space-y-8">
+        <div className="w-full max-w-lg space-y-8">
           
           {/* Brand Header */}
           <div className="text-center">
@@ -70,7 +75,7 @@ export default function Login() {
                     type="email"
                     value={email}
                     onChange={e => setEmail(e.target.value)}
-                    className="w-full bg-[#0e1117] border border-[#2a2e39] text-white text-sm rounded-lg focus:ring-1 focus:ring-[#2962ff] focus:border-[#2962ff] block w-full p-3 transition-all placeholder-[#2a2e39] focus:outline-none"
+                    className="w-full bg-[#0e1117] border border-[#2a2e39] text-white text-sm rounded-lg focus:ring-1 focus:ring-[#2962ff] focus:border-[#2962ff] p-3 transition-all placeholder-[#2a2e39] focus:outline-none"
                     placeholder="Enter your email"
                     required
                   />
@@ -78,15 +83,13 @@ export default function Login() {
               </div>
 
               <div className="space-y-1.5">
-                <div className="flex justify-between items-center">
-                  <label className="text-xs font-medium text-[#787b86] uppercase tracking-wide ml-1">Password</label>
-                </div>
+                <label className="text-xs font-medium text-[#787b86] uppercase tracking-wide ml-1">Password</label>
                 <div className="relative">
                   <input
                     type="password"
                     value={password}
                     onChange={e => setPassword(e.target.value)}
-                    className="w-full bg-[#0e1117] border border-[#2a2e39] text-white text-sm rounded-lg focus:ring-1 focus:ring-[#2962ff] focus:border-[#2962ff] block w-full p-3 transition-all placeholder-[#2a2e39] focus:outline-none"
+                    className="w-full bg-[#0e1117] border border-[#2a2e39] text-white text-sm rounded-lg focus:ring-1 focus:ring-[#2962ff] focus:border-[#2962ff] p-3 transition-all placeholder-[#2a2e39] focus:outline-none"
                     placeholder="••••••••"
                     required
                   />
@@ -108,7 +111,7 @@ export default function Login() {
               </button>
             </form>
 
-            {/* --- ADDED: CREATE ACCOUNT LINK --- */}
+            {/* --- SIGNUP LINK --- */}
             <div className="mt-6 text-center pt-4 border-t border-[#2a2e39]">
               <p className="text-sm text-[#787b86]">
                 Don't have an account?{' '}
