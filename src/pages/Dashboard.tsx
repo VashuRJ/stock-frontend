@@ -9,6 +9,7 @@ import {
 import { useNavigate } from 'react-router-dom'
 import { api } from '@/api/client'
 import Navbar from '@/components/Navbar'
+import WatchlistPanelComplete from '@/components/dashboardpanel/WatchlistPanelComplete'
 
 // --- INTERFACES ---
 interface StockData {
@@ -166,57 +167,19 @@ export default function Dashboard() {
   const [showIndicators, setShowIndicators] = useState(false)
   const [isFullscreen, setIsFullscreen] = useState(false) // NEW: Fullscreen mode
   
-  // Search State - NEW
+  // Search State
   const [searchQuery, setSearchQuery] = useState('')
   const [searchSuggestions, setSearchSuggestions] = useState<string[]>([])
   const [showSearch, setShowSearch] = useState(false)
   
   // Columns Data
   const [indices, setIndices] = useState<StockData[]>([])
-  const [watchlistData, setWatchlistData] = useState<StockData[]>([])
   const [popularData, setPopularData] = useState<StockData[]>([])
-  const [gainers, setGainers] = useState<StockData[]>([]) // NEW: Real gainers
-  const [losers, setLosers] = useState<StockData[]>([]) // NEW: Real losers
-  
-  // Watchlist Adding State
-  const [isAddingWatchlist, setIsAddingWatchlist] = useState(false)
-  const [newWatchlistSymbol, setNewWatchlistSymbol] = useState('')
-  const [addingLoading, setAddingLoading] = useState(false)
-  const [suggestions, setSuggestions] = useState<string[]>([])
+  const [gainers, setGainers] = useState<StockData[]>([])
+  const [losers, setLosers] = useState<StockData[]>([])
   
   // Toast Notification State
   const [toast, setToast] = useState<{message: string, type: 'success' | 'error'} | null>(null)
-  
-  // Watchlist Backend State - MULTI-WATCHLIST SUPPORT
-  const [allWatchlists, setAllWatchlists] = useState<WatchlistItem[]>([])
-  const [currentWatchlist, setCurrentWatchlist] = useState<WatchlistItem | null>(null)
-  const [expandedWatchlistId, setExpandedWatchlistId] = useState<number | null>(null)
-  const [watchlistLoading, setWatchlistLoading] = useState(false)
-  
-  // Create Watchlist Modal State
-  const [showCreateModal, setShowCreateModal] = useState(false)
-  const [newWatchlistName, setNewWatchlistName] = useState('')
-  const [newWatchlistSymbols, setNewWatchlistSymbols] = useState<string[]>([])
-  const [modalSearchQuery, setModalSearchQuery] = useState('')
-  const [modalSearchResults, setModalSearchResults] = useState<string[]>([])
-  const [creatingWatchlist, setCreatingWatchlist] = useState(false)
-
-  // Rename Watchlist State
-  const [renamingWatchlistId, setRenamingWatchlistId] = useState<number | null>(null)
-  const [renameValue, setRenameValue] = useState('')
-  const [showRenameModal, setShowRenameModal] = useState(false)
-  const [showDeleteModal, setShowDeleteModal] = useState(false)
-  const [deleteTargetWatchlist, setDeleteTargetWatchlist] = useState<WatchlistItem | null>(null)
-  
-  // Add Popular Stock to Watchlist Modal State
-  const [showAddToWatchlistModal, setShowAddToWatchlistModal] = useState(false)
-  const [selectedPopularStock, setSelectedPopularStock] = useState<StockData | null>(null)
-  const [selectedWatchlistIds, setSelectedWatchlistIds] = useState<Set<number>>(new Set())
-  const [addingToWatchlist, setAddingToWatchlist] = useState(false)
-  const [showAddSymbolModal, setShowAddSymbolModal] = useState(false)
-  const [addSymbolQuery, setAddSymbolQuery] = useState('')
-  const [addSymbolSuggestions, setAddSymbolSuggestions] = useState<string[]>([])
-  const [selectedAddSymbol, setSelectedAddSymbol] = useState<string | null>(null)
   
   // Dynamic lists loaded from backend
   const [allStockSymbols, setAllStockSymbols] = useState<string[]>([])
@@ -233,16 +196,6 @@ export default function Dashboard() {
     if (stockData?.sector) parts.push(stockData.sector)
     return parts.join(' • ')
   }, [stockData, selectedSymbol])
-
-  const watchlistStats = useMemo(() => {
-    if (!watchlistData.length) return { avgChange: 0, avgChangePct: 0 }
-    const totalChange = watchlistData.reduce((sum, s) => sum + s.change, 0)
-    const totalPct = watchlistData.reduce((sum, s) => sum + s.changePercent, 0)
-    return {
-      avgChange: totalChange / watchlistData.length,
-      avgChangePct: totalPct / watchlistData.length,
-    }
-  }, [watchlistData])
 
   // --- HELPER FOR INDEX NAMES ---
   const getIndexName = (symbol: string) => {
@@ -361,14 +314,14 @@ export default function Dashboard() {
         }
       }
 
-      // Map UI timeframe to number of days the backend should return
+      // Map UI timeframe to number of days the backend should return (for DAILY candles only)
       const daysByInterval: Record<string, number> = {
-        '1D': 7,   // short window but a few candles for context
-        '1W': 14,
-        '1M': 30,
-        '3M': 90,
-        '6M': 180,
-        '1Y': 365,
+        '1D': 0,   // Special case: 0 means use intraday endpoint (handled above)
+        '1W': 14,  // ~2 weeks of daily data
+        '1M': 30,  // ~1 month of daily data
+        '3M': 90,  // ~3 months of daily data
+        '6M': 180, // ~6 months of daily data
+        '1Y': 365, // 1 year of daily data
       }
 
       const days = daysByInterval[interval] ?? 365
@@ -502,224 +455,6 @@ export default function Dashboard() {
     })
     
     return data
-  }
-
-  // --- WATCHLIST BACKEND FUNCTIONS ---
-
-  // Load All Watchlists for User
-  const loadAllWatchlists = async (email: string) => {
-    try {
-      const res = await api.get(`/watchlist/detail/${email}`)
-      const watchlists: WatchlistResponse[] = res.data || []
-      setAllWatchlists(watchlists)
-      
-      // Set first as current if available
-      if (watchlists.length > 0) {
-        setCurrentWatchlist(watchlists[0])
-        setExpandedWatchlistId(watchlists[0].id)
-        return watchlists[0]
-      } else {
-        return null
-      }
-    } catch (err) {
-      console.error('Error loading watchlists:', err)
-      return null
-    }
-  }
-  
-  // Create New Watchlist
-  const createNewWatchlist = async () => {
-    const userEmail = localStorage.getItem('user_email')
-    if (!userEmail) {
-      showToast('❌ Please login first', 'error')
-      return
-    }
-    
-    if (!newWatchlistName.trim()) {
-      showToast('❌ Please enter watchlist name', 'error')
-      return
-    }
-    
-    setCreatingWatchlist(true)
-    try {
-      const res = await api.post('/watchlist/', {
-        email: userEmail,
-        watchlist_name: newWatchlistName.trim(),
-        symbols: newWatchlistSymbols
-      })
-      
-      const newWatchlist = res.data
-      setAllWatchlists(prev => [...prev, newWatchlist])
-      setCurrentWatchlist(newWatchlist)
-      
-      // Load prices for new watchlist
-      const symbols = newWatchlist.symbol || []
-      const wResults = await Promise.all(symbols.map((s: string) => fetchStock(s)))
-      setWatchlistData(wResults.filter(Boolean) as StockData[])
-      
-      showToast(`✅ Watchlist "${newWatchlistName}" created`, 'success')
-      
-      // Reset modal
-      setShowCreateModal(false)
-      setNewWatchlistName('')
-      setNewWatchlistSymbols([])
-      setModalSearchQuery('')
-      setModalSearchResults([])
-    } catch (err: any) {
-      const msg = err?.response?.data?.detail || 'Failed to create watchlist'
-      showToast(`❌ ${msg}`, 'error')
-    } finally {
-      setCreatingWatchlist(false)
-    }
-  }
-  
-  // Switch Active Watchlist
-  const switchWatchlist = async (watchlist: WatchlistItem) => {
-    setCurrentWatchlist(watchlist)
-    setExpandedWatchlistId(watchlist.id)
-    const symbols = watchlist.symbol || []
-    setWatchlistLoading(true)
-    const wResults = await Promise.all(symbols.map((s: string) => fetchStock(s)))
-    setWatchlistData(wResults.filter(Boolean) as StockData[])
-    setWatchlistLoading(false)
-  }
-  
-  // Delete Watchlist
-  const deleteWatchlist = async (watchlistId: number) => {
-    if (!confirm('Delete this watchlist?')) return
-    
-    try {
-      await api.delete(`/watchlist/${watchlistId}`)
-      setAllWatchlists(prev => prev.filter(w => w.id !== watchlistId))
-      
-      // Switch to first remaining watchlist or clear
-      const remaining = allWatchlists.filter(w => w.id !== watchlistId)
-      if (remaining.length > 0) {
-        switchWatchlist(remaining[0])
-      } else {
-        setCurrentWatchlist(null)
-        setWatchlistData([])
-      }
-      
-      showToast('🗑️ Watchlist deleted', 'success')
-    } catch (err) {
-      showToast('❌ Failed to delete watchlist', 'error')
-    }
-  }
-
-  // Rename Watchlist
-  const renameWatchlist = async (watchlistId: number, newName: string) => {
-    const trimmed = newName.trim()
-    if (!trimmed) {
-      showToast('❌ Please enter a name', 'error')
-      return
-    }
-
-    try {
-      const res = await api.put(`/watchlist/${watchlistId}`, {
-        watchlist_name: trimmed,
-      })
-
-      const updated = res.data
-      setAllWatchlists(prev => prev.map(w => w.id === watchlistId ? updated : w))
-      if (currentWatchlist?.id === watchlistId) {
-        setCurrentWatchlist(updated)
-      }
-      showToast('✅ Watchlist renamed', 'success')
-      setRenamingWatchlistId(null)
-    } catch (err: any) {
-      const msg = err?.response?.data?.detail || 'Failed to rename watchlist'
-      showToast(`❌ ${msg}`, 'error')
-    }
-  }
-  
-  // Modal: Search stocks
-  const handleModalSearch = async (query: string) => {
-    setModalSearchQuery(query)
-    if (query.length >= 2) {
-      const matches = (await fetchStockSuggestions(query, 10)).filter((s: string) => !newWatchlistSymbols.includes(s))
-      setModalSearchResults(matches)
-    } else {
-      setModalSearchResults([])
-    }
-  }
-
-  // Quick add modal search
-  const handleAddSymbolSearch = async (query: string) => {
-    setAddSymbolQuery(query)
-    if (query.length >= 2) {
-      const matches = await fetchStockSuggestions(query, 10)
-      setAddSymbolSuggestions(matches)
-    } else {
-      setAddSymbolSuggestions([])
-    }
-  }
-  
-  // Modal: Add symbol to new watchlist
-  const addSymbolToNewWatchlist = (symbol: string) => {
-    if (!newWatchlistSymbols.includes(symbol)) {
-      setNewWatchlistSymbols(prev => [...prev, symbol])
-      setModalSearchQuery('')
-      setModalSearchResults([])
-    }
-  }
-  
-  // Modal: Remove symbol from new watchlist
-  const removeSymbolFromNewWatchlist = (symbol: string) => {
-    setNewWatchlistSymbols(prev => prev.filter(s => s !== symbol))
-  }
-
-  // Toggle expand/collapse for a watchlist card
-  const toggleExpandWatchlist = async (wl: WatchlistItem) => {
-    if (expandedWatchlistId === wl.id) {
-      setExpandedWatchlistId(null)
-      return
-    }
-    setExpandedWatchlistId(wl.id)
-    if (currentWatchlist?.id !== wl.id) {
-      await switchWatchlist(wl)
-    }
-  }
-
-  // Add Symbol to Backend Watchlist
-  const addSymbolToBackend = async (watchlistId: number, symbol: string): Promise<boolean> => {
-    try {
-      await api.post(`/watchlist/${watchlistId}/add-symbol/${symbol}`)
-      return true
-    } catch (err: any) {
-      console.error('Error adding symbol to backend:', err)
-      if (err?.response?.data?.detail) {
-        showToast(err.response.data.detail, 'error')
-      }
-      return false
-    }
-  }
-
-  // Remove Symbol from Backend Watchlist
-  const removeSymbolFromBackend = async (watchlistId: number, symbol: string): Promise<boolean> => {
-    try {
-      console.log('🗑️ Deleting symbol:', symbol, 'from watchlist:', watchlistId)
-      const response = await api.delete(`/watchlist/${watchlistId}/remove-symbol/${symbol}`)
-      console.log('✅ Delete successful. Response:', response.data)
-      
-      // Verify the symbol was actually removed from backend
-      if (response.data && response.data.symbol) {
-        console.log('Updated backend symbols:', response.data.symbol)
-        // Update currentWatchlist with backend response
-        setCurrentWatchlist(response.data)
-      }
-      
-      return true
-    } catch (err: any) {
-      console.error('❌ Error removing symbol from backend:', err)
-      console.error('Error details:', err?.response?.data)
-      if (err?.response?.data?.detail) {
-        showToast(err.response.data.detail, 'error')
-      } else {
-        showToast('❌ Network error. Please check backend server', 'error')
-      }
-      return false
-    }
   }
 
   // --- TECHNICAL INDICATORS (Professional Implementation) ---
@@ -856,24 +591,9 @@ export default function Dashboard() {
     return () => clearInterval(interval)
   }, [indicesSymbols])
 
-  // Load All Watchlists & Popular Stocks on Mount
+  // Load Popular Stocks, Gainers & Losers on Mount
   useEffect(() => {
     const load = async () => {
-      setWatchlistLoading(true)
-      
-      const userEmail = localStorage.getItem('user_email')
-      
-      if (userEmail) {
-        const watchlist = await loadAllWatchlists(userEmail)
-        
-        if (watchlist) {
-          const symbols = watchlist.symbol || []
-          const wResults = await Promise.all(symbols.map(s => fetchStock(s)))
-          setWatchlistData(wResults.filter(Boolean) as StockData[])
-        }
-      }
-      
-      // Load popular stocks from backend (more items for scrolling)
       try {
         const popRes = await api.get('/stocks/popular', { params: { limit: 40 } })
         const popularSymbols = popRes.data.map((s: any) => s.symbol)
@@ -888,8 +608,6 @@ export default function Dashboard() {
       } catch (err) {
         console.error('Failed to load popular stocks:', err)
       }
-      
-      setWatchlistLoading(false)
     }
     load()
   }, [])
@@ -1015,18 +733,16 @@ export default function Dashboard() {
             <div className="p-4 border-b border-[#2a2e39] bg-[#1e222d] flex justify-between items-center">
               <h3 className="font-bold text-white text-sm flex items-center gap-2">📊 Major Indices</h3>
             </div>
-            
             <div className="flex-1 overflow-y-auto p-3 space-y-3">
               {indices.map((idx, i) => (
-                <div 
-                  key={i} 
-                  onClick={() => setSelectedSymbol(idx.symbol)} 
+                <div
+                  key={i}
+                  onClick={() => setSelectedSymbol(idx.symbol)}
                   className="p-4 bg-[#1e222d] rounded-xl border border-[#2a2e39] hover:border-[#2962ff] transition-all group cursor-pointer"
                 >
                   <div className="flex justify-between items-center mb-2">
-                    {/* Fixed Name Display */}
                     <span className="font-bold text-white text-sm group-hover:text-[#2962ff] transition-colors">
-                        {getIndexName(idx.symbol)}
+                      {getIndexName(idx.symbol)}
                     </span>
                     <span className={`text-xs px-2 py-1 rounded font-bold ${getBg(idx.change)} ${getColor(idx.change)}`}>
                       {idx.changePercent.toFixed(2)}%
@@ -1039,9 +755,9 @@ export default function Dashboard() {
                 </div>
               ))}
               {indices.length === 0 && (
-                  <div className="p-4 text-center">
-                      <p className="text-xs text-[#787b86]">Connecting to Market...</p>
-                  </div>
+                <div className="p-4 text-center">
+                  <p className="text-xs text-[#787b86]">Connecting to Market...</p>
+                </div>
               )}
             </div>
           </div>
@@ -1104,19 +820,6 @@ export default function Dashboard() {
                 <div>
                   <div className="flex items-center gap-3 flex-wrap">
                     <h2 className="text-2xl font-bold text-white">{cleanCompanyName(stockData?.name) || selectedSymbol.replace('.NS', '')}</h2>
-                    <button
-                      onClick={() => {
-                        setSelectedAddSymbol(selectedSymbol)
-                        setAddSymbolQuery(selectedSymbol)
-                        setAddSymbolSuggestions([])
-                        setSelectedWatchlistIds(new Set())
-                        setShowAddSymbolModal(true)
-                      }}
-                      className="inline-flex items-center gap-2 bg-[#1e222d] border border-[#2a2e39] hover:border-[#2962ff] text-[#d0d2dc] hover:text-white text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors"
-                      title="Add this or another stock to a watchlist"
-                    >
-                      <Plus size={14} /> Search & Add
-                    </button>
                   </div>
                   <div className="flex items-center gap-2">
                     <p className="text-xs text-[#787b86]">{stockDescriptor || 'NSE'}</p>
@@ -1452,152 +1155,14 @@ export default function Dashboard() {
 
         {/* ================= RIGHT COLUMN: WATCHLIST & POPULAR ================= */}
         <div className="col-span-12 lg:col-span-3 flex flex-col gap-4">
-          
-          {/* Multi-Watchlist Panel styled like reference */}
-          <div className="bg-[#0f1118] rounded-xl border border-[#1f2330] flex flex-col shadow-lg h-[40%] overflow-hidden">
-            <div className="p-3">
-              <button
-                onClick={() => setShowCreateModal(true)}
-                className="w-full bg-[#2a2e39] hover:bg-[#1e222d] text-white font-semibold py-2 rounded-md border border-[#3a3f4f] transition-colors text-sm"
-              >
-                + New Watchlist
-              </button>
-            </div>
-
-            <div className="overflow-y-auto px-2 pb-3 flex-1 space-y-2">
-              {allWatchlists.length === 0 && (
-                <div className="text-center text-xs text-[#787b86] py-6">No watchlists yet. Create one to start tracking.</div>
-              )}
-
-              {allWatchlists.map((wl) => {
-                const isActive = currentWatchlist?.id === wl.id
-                const symbolCount = wl.symbol?.length || 0
-                return (
-                  <div key={wl.id} className="bg-[#131722] border border-[#1f2330] rounded-lg overflow-hidden">
-                    <div className="w-full flex items-center justify-between px-3 py-3 text-white">
-                      <div
-                        className="flex items-center gap-2 cursor-pointer"
-                        onClick={() => toggleExpandWatchlist(wl)}
-                      >
-                        {renamingWatchlistId === wl.id ? (
-                          <input
-                            className="bg-[#1b2030] border border-[#2a2e39] text-sm text-white px-2 py-1 rounded outline-none focus:border-[#2962ff]"
-                            value={renameValue}
-                            onChange={(e) => setRenameValue(e.target.value)}
-                            onClick={(e) => e.stopPropagation()}
-                            maxLength={50}
-                            autoFocus
-                          />
-                        ) : (
-                          <>
-                            <span className="text-base font-semibold">{wl.watchlist_name}</span>
-                            <span className="text-[10px] text-[#787b86]">{symbolCount} Symbols</span>
-                          </>
-                        )}
-                      </div>
-
-                      <div className="flex items-center gap-2 text-[#cfd3dc]">
-                        {expandedWatchlistId === wl.id && renamingWatchlistId !== wl.id && (
-                          <>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                setRenamingWatchlistId(wl.id)
-                                setRenameValue(wl.watchlist_name)
-                                setIsAddingWatchlist(false)
-                                setShowRenameModal(true)
-                              }}
-                              className="p-2 rounded-md bg-[#1f2330] border border-[#2a2e39] text-[#c3d4ff] hover:border-[#2962ff] hover:text-white transition-colors"
-                              title="Rename"
-                            >
-                              <Pencil size={14} />
-                            </button>
-                            <button
-                              onClick={(e) => { 
-                                e.stopPropagation(); 
-                                setDeleteTargetWatchlist(wl); 
-                                setShowDeleteModal(true);
-                              }}
-                              className="p-2 rounded-md bg-[#1f2330] border border-[#2a2e39] text-[#f8b4b4] hover:border-[#f23645] hover:text-white transition-colors"
-                              title="Delete"
-                            >
-                              <Trash2 size={14} />
-                            </button>
-                          </>
-                        )}
-
-                        <div
-                          onClick={() => toggleExpandWatchlist(wl)}
-                          className="w-6 h-6 rounded border border-[#2a2e39] bg-[#0f1320] flex items-center justify-center cursor-pointer"
-                        >
-                          {expandedWatchlistId === wl.id ? (
-                            <ChevronDown size={14} />
-                          ) : (
-                            <ChevronRight size={14} />
-                          )}
-                        </div>
-                      </div>
-                    </div>
-
-                    {expandedWatchlistId === wl.id && (
-                      <div className="px-3 pb-3 space-y-3">
-                        {/* Toolbar */}
-                        <div className="flex items-center justify-between text-xs text-[#787b86] pt-2">
-                          <span>Stocks</span>
-                        </div>
-
-                        {/* Watchlist Items */}
-                        <div className="space-y-2">
-                          {watchlistLoading ? (
-                            <div className="text-center text-xs text-[#787b86] py-6">Loading watchlist...</div>
-                          ) : watchlistData.length > 0 ? (
-                            watchlistData.map((stock) => (
-                              <div
-                                key={stock.symbol}
-                                className="group flex items-center justify-between bg-[#1b2030] border border-[#1f2330] rounded-lg px-3 py-2 hover:border-[#2962ff] transition-colors cursor-pointer gap-2"
-                                onClick={() => setSelectedSymbol(stock.symbol)}
-                              >
-                                <div className="flex-1 min-w-0">
-                                  <div className="text-sm font-semibold text-white leading-tight">{stock.symbol.replace('.NS', '')}</div>
-                                  <div className="text-[10px] text-[#787b86]">{cleanCompanyName(stock.name) || 'NSE'}</div>
-                                </div>
-                                <div className="text-right flex-shrink-0">
-                                  <div className="text-sm text-white font-mono">₹{stock.price.toFixed(2)}</div>
-                                  <div className={`text-xs ${getColor(stock.change)}`}>{stock.changePercent.toFixed(2)}%</div>
-                                </div>
-
-                                {/* Hover Remove Control - Checkmark visible, X on hover */}
-                                <button
-                                  onClick={async (e) => {
-                                    e.stopPropagation()
-                                    if (currentWatchlist) {
-                                      const ok = await removeSymbolFromBackend(currentWatchlist.id, stock.symbol)
-                                      if (ok) {
-                                        setWatchlistData(prev => prev.filter(s => s.symbol !== stock.symbol))
-                                        setCurrentWatchlist(prev => prev ? { ...prev, symbol: (prev.symbol || []).filter(sym => sym !== stock.symbol) } : prev)
-                                        showToast(`✅ Removed ${stock.symbol.replace('.NS','')} from watchlist`, 'success')
-                                      }
-                                    }
-                                  }}
-                                  className="flex-shrink-0 w-7 h-7 rounded-full border border-[#2a2e39] bg-[#0f1320] text-[#787b86] hover:text-[#f23645] hover:border-[#f23645] flex items-center justify-center transition-colors"
-                                  title="Remove from watchlist"
-                                >
-                                  <CheckCircle2 className="group-hover:hidden" size={14} />
-                                  <X className="hidden group-hover:block" size={11} />
-                                </button>
-                              </div>
-                            ))
-                          ) : (
-                            <div className="text-center text-xs text-[#787b86] py-6">No symbols in this watchlist</div>
-                          )}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )
-              })}
-            </div>
-          </div>
+          <WatchlistPanelComplete
+            selectedSymbol={selectedSymbol}
+            onSelectSymbol={setSelectedSymbol}
+            fetchStock={fetchStock}
+            fetchStockSuggestions={fetchStockSuggestions}
+            cleanCompanyName={cleanCompanyName}
+            getColor={getColor}
+          />
 
           {/* Popular Stocks */}
           <div className="bg-[#131722] rounded-xl border border-[#2a2e39] flex flex-col shadow-lg h-[65%] overflow-hidden">
@@ -1623,18 +1188,6 @@ export default function Dashboard() {
                     <div className={`text-xs font-medium ${getColor(stock.change)}`}>
                       {stock.change > 0 ? '+' : ''}{stock.change.toFixed(1)}%
                     </div>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        setSelectedPopularStock(stock)
-                        setSelectedWatchlistIds(new Set())
-                        setShowAddToWatchlistModal(true)
-                      }}
-                      className="p-1.5 rounded bg-[#2a2e39] border border-[#2a2e39] text-[#787b86] hover:border-[#2962ff] hover:text-white transition-colors"
-                      title="Add to watchlist"
-                    >
-                      <Plus size={14} />
-                    </button>
                   </div>
                 </div>
               ))}
@@ -1649,481 +1202,7 @@ export default function Dashboard() {
 
       </div>
       </div>
-      
-      {/* CREATE WATCHLIST MODAL (Matches Reference Image) */}
-      {showCreateModal && (
-        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4" onClick={() => setShowCreateModal(false)}>
-          <div className="bg-[#131722] rounded-2xl border border-[#2a2e39] w-full max-w-lg shadow-2xl" onClick={(e) => e.stopPropagation()}>
-            {/* Header */}
-            <div className="p-5 border-b border-[#2a2e39] flex justify-between items-center">
-              <h2 className="text-lg font-bold text-white">Add a New Watchlist</h2>
-              <button onClick={() => setShowCreateModal(false)} className="text-[#787b86] hover:text-white">
-                <X size={20} />
-              </button>
-            </div>
-            
-            {/* Body */}
-            <div className="p-5 space-y-4">
-              {/* Watchlist Name Input */}
-              <div>
-                <label className="text-sm text-[#787b86] mb-2 block">New Watchlist Name</label>
-                <input
-                  type="text"
-                  placeholder="Watchlist 1"
-                  value={newWatchlistName}
-                  onChange={(e) => setNewWatchlistName(e.target.value)}
-                  className="w-full bg-[#1e222d] border border-[#2a2e39] text-white px-4 py-3 rounded-lg outline-none focus:border-[#2962ff]"
-                  maxLength={50}
-                />
-              </div>
-              
-              {/* Stock Search Section */}
-              <div>
-                <label className="text-sm text-[#787b86] mb-2 block">Select symbols to add to your new watchlist</label>
-                <div className="relative">
-                  <div className="flex items-center bg-[#1e222d] border border-[#2a2e39] rounded-lg px-3 py-2 focus-within:border-[#2962ff]">
-                    <Search size={16} className="text-[#787b86] mr-2" />
-                    <input
-                      type="text"
-                      placeholder="Search stocks, ETFs, & more"
-                      value={modalSearchQuery}
-                      onChange={(e) => handleModalSearch(e.target.value)}
-                      className="flex-1 bg-transparent text-white text-sm outline-none"
-                    />
-                  </div>
-                  
-                  {/* Search Results Dropdown */}
-                  {modalSearchResults.length > 0 && (
-                    <div className="absolute top-full left-0 right-0 mt-1 bg-[#1e222d] border border-[#2962ff] rounded-lg shadow-2xl max-h-48 overflow-y-auto z-10">
-                      {modalSearchResults.map((sym, i) => (
-                        <div
-                          key={i}
-                          onClick={() => addSymbolToNewWatchlist(sym)}
-                          className="px-4 py-2 hover:bg-[#2962ff]/20 cursor-pointer text-white text-sm border-b border-[#2a2e39] last:border-0 flex justify-between items-center"
-                        >
-                          <span className="font-medium">{sym.replace('.NS', '')}</span>
-                          <span className="text-xs text-[#787b86]">NSE</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-              
-              {/* Selected Symbols */}
-              <div className="flex flex-wrap gap-2 min-h-[60px] max-h-[120px] overflow-y-auto p-2 bg-[#1e222d]/50 rounded-lg border border-[#2a2e39]">
-                {newWatchlistSymbols.length === 0 ? (
-                  <div className="w-full flex items-center justify-center text-xs text-[#787b86] py-4">
-                    No symbols added yet
-                  </div>
-                ) : (
-                  newWatchlistSymbols.map((sym, i) => (
-                    <div key={i} className="flex items-center gap-2 bg-[#2962ff] text-white px-3 py-1.5 rounded-full text-xs font-medium">
-                      <span>{sym.replace('.NS', '')}</span>
-                      <button
-                        onClick={() => removeSymbolFromNewWatchlist(sym)}
-                        className="hover:bg-white/20 rounded-full w-4 h-4 flex items-center justify-center"
-                      >
-                        ×
-                      </button>
-                    </div>
-                  ))
-                )}
-              </div>
-              
-              {/* Suggested Stocks (Optional - Like Image) */}
-              <div>
-                <p className="text-xs text-[#787b86] mb-2">Suggested for you</p>
-                <div className="flex flex-wrap gap-2">
-                  {['INFY.NS', 'RELIANCE.NS', 'NIFTY.NS', 'BTC.NS', 'INRUSD.NS', 'ETH.NS'].map((sym, i) => (
-                    <button
-                      key={i}
-                      onClick={() => addSymbolToNewWatchlist(sym)}
-                      disabled={newWatchlistSymbols.includes(sym)}
-                      className="flex items-center gap-2 bg-[#1e222d] border border-[#2a2e39] hover:border-[#2962ff] text-white px-3 py-1.5 rounded-full text-xs disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      <span>{sym.replace('.NS', '')}</span>
-                      <Plus size={12} />
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-            
-            {/* Footer Buttons */}
-            <div className="p-5 border-t border-[#2a2e39] flex gap-3 justify-end">
-              <button
-                onClick={() => setShowCreateModal(false)}
-                className="px-6 py-2.5 bg-[#2a2e39] text-white rounded-lg hover:bg-[#3a3e49] transition-colors font-medium"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={createNewWatchlist}
-                disabled={creatingWatchlist || !newWatchlistName.trim()}
-                className="px-6 py-2.5 bg-[#2962ff] text-white rounded-lg hover:bg-[#1e53e5] disabled:opacity-50 disabled:cursor-not-allowed transition-colors font-medium flex items-center gap-2"
-              >
-                {creatingWatchlist ? (
-                  <>
-                    <Activity className="animate-spin" size={16} />
-                    Creating...
-                  </>
-                ) : (
-                  'Save'
-                )}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
-      {/* ADD STOCK (SEARCH) TO WATCHLIST MODAL */}
-      {showAddSymbolModal && (
-        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4" onClick={() => { setShowAddSymbolModal(false); setSelectedAddSymbol(null); setAddSymbolSuggestions([]); setSelectedWatchlistIds(new Set()) }}>
-          <div className="bg-[#131722] rounded-2xl border border-[#2a2e39] w-full max-w-md shadow-2xl" onClick={(e) => e.stopPropagation()}>
-            {/* Header */}
-            <div className="p-5 border-b border-[#2a2e39] flex justify-between items-center">
-              <h2 className="text-lg font-bold text-white">Add stock to watchlist</h2>
-              <button onClick={() => { setShowAddSymbolModal(false); setSelectedAddSymbol(null); setAddSymbolSuggestions([]); setSelectedWatchlistIds(new Set()) }} className="text-[#787b86] hover:text-white">
-                <X size={20} />
-              </button>
-            </div>
-
-            {/* Body */}
-            <div className="p-5 space-y-4">
-              {/* Search */}
-              <div className="relative">
-                <label className="text-sm text-[#787b86] mb-2 block font-medium">Search any stock</label>
-                <div className="flex items-center bg-[#1e222d] border border-[#2a2e39] rounded-lg px-3 py-2 focus-within:border-[#2962ff]">
-                  <Search size={16} className="text-[#787b86] mr-2" />
-                  <input
-                    type="text"
-                    placeholder="Search stocks, ETFs, & more"
-                    value={addSymbolQuery}
-                    onChange={(e) => handleAddSymbolSearch(e.target.value)}
-                    className="flex-1 bg-transparent text-white text-sm outline-none"
-                  />
-                  {addSymbolQuery && (
-                    <button
-                      onClick={() => { setAddSymbolQuery(''); setAddSymbolSuggestions([]); setSelectedAddSymbol(null) }}
-                      className="text-[#787b86] hover:text-white"
-                    >
-                      <X size={14} />
-                    </button>
-                  )}
-                </div>
-
-                {addSymbolSuggestions.length > 0 && (
-                  <div className="absolute top-full left-0 right-0 mt-1 bg-[#1e222d] border border-[#2962ff] rounded-lg shadow-2xl max-h-48 overflow-y-auto z-10">
-                    {addSymbolSuggestions.map((sym, i) => (
-                      <div
-                        key={i}
-                        onClick={() => { setSelectedAddSymbol(sym); setAddSymbolQuery(sym); setAddSymbolSuggestions([]) }}
-                        className="px-4 py-2 hover:bg-[#2962ff]/20 cursor-pointer text-white text-sm border-b border-[#2a2e39] last:border-0 flex justify-between items-center"
-                      >
-                        <span className="font-medium">{sym.replace('.NS', '')}</span>
-                        <span className="text-xs text-[#787b86]">NSE</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {/* Selected symbol */}
-              <div className="bg-[#0f1118] border border-[#2a2e39] rounded-lg p-3 flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-[#787b86]">Selected</span>
-                  <span className="px-3 py-1 rounded-full text-sm font-semibold bg-[#2962ff]/10 text-[#d0e0ff] border border-[#2962ff]/40">
-                    {selectedAddSymbol ? selectedAddSymbol.replace('.NS', '') : 'Pick a symbol'}
-                  </span>
-                </div>
-                <button
-                  onClick={() => { setSelectedAddSymbol(selectedSymbol); setAddSymbolQuery(selectedSymbol); setAddSymbolSuggestions([]) }}
-                  className="text-xs px-3 py-1.5 rounded-lg border border-[#2a2e39] bg-[#1e222d] text-[#d0d2dc] hover:border-[#2962ff] hover:text-white"
-                >
-                  Use current
-                </button>
-              </div>
-
-              {/* Watchlist Checkboxes */}
-              <div>
-                <label className="text-sm text-[#787b86] mb-3 block font-medium">Select watchlists</label>
-                <div className="space-y-2 bg-[#0f1118] rounded-lg p-3 max-h-64 overflow-y-auto">
-                  {allWatchlists.length === 0 ? (
-                    <p className="text-xs text-[#787b86] text-center py-4">No watchlists yet. Create one first.</p>
-                  ) : (
-                    allWatchlists.map((wl) => (
-                      <label key={wl.id} className="flex items-center gap-3 p-2 hover:bg-[#1e222d] rounded cursor-pointer transition-colors">
-                        <input
-                          type="checkbox"
-                          checked={selectedWatchlistIds.has(wl.id)}
-                          onChange={(e) => {
-                            const newSet = new Set(selectedWatchlistIds)
-                            if (e.target.checked) {
-                              newSet.add(wl.id)
-                            } else {
-                              newSet.delete(wl.id)
-                            }
-                            setSelectedWatchlistIds(newSet)
-                          }}
-                          className="w-4 h-4 rounded accent-[#2962ff]"
-                        />
-                        <div className="flex-1">
-                          <div className="text-sm text-white font-medium">{wl.watchlist_name}</div>
-                          <div className="text-xs text-[#787b86]">{wl.symbol?.length || 0} symbols</div>
-                        </div>
-                      </label>
-                    ))
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {/* Footer */}
-            <div className="p-5 border-t border-[#2a2e39] flex gap-3 justify-end">
-              <button
-                onClick={() => { setShowAddSymbolModal(false); setSelectedAddSymbol(null); setAddSymbolSuggestions([]); setSelectedWatchlistIds(new Set()) }}
-                className="px-6 py-2 bg-[#2a2e39] text-white rounded-lg hover:bg-[#3a3e49] transition-colors font-medium text-sm"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={async () => {
-                  if (!selectedAddSymbol) {
-                    showToast('❌ Pick a stock first', 'error')
-                    return
-                  }
-                  if (selectedWatchlistIds.size === 0) {
-                    showToast('❌ Select at least one watchlist', 'error')
-                    return
-                  }
-
-                  setAddingToWatchlist(true)
-                  let successCount = 0
-                  for (const watchlistId of selectedWatchlistIds) {
-                    const success = await addSymbolToBackend(watchlistId, selectedAddSymbol)
-                    if (success) successCount++
-                  }
-                  setAddingToWatchlist(false)
-
-                  if (successCount === selectedWatchlistIds.size) {
-                    showToast(`✅ Added to ${successCount} watchlist${successCount > 1 ? 's' : ''}`, 'success')
-                    setShowAddSymbolModal(false)
-                    setSelectedAddSymbol(null)
-                    setSelectedWatchlistIds(new Set())
-                  } else {
-                    showToast(`⚠️ Added to ${successCount}/${selectedWatchlistIds.size} watchlists`, 'error')
-                  }
-                }}
-                disabled={addingToWatchlist || !selectedAddSymbol || selectedWatchlistIds.size === 0}
-                className="px-6 py-2 bg-[#2962ff] text-white rounded-lg hover:bg-[#1e53e5] disabled:opacity-50 disabled:cursor-not-allowed transition-colors font-medium text-sm"
-              >
-                {addingToWatchlist ? 'Adding...' : 'Save'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ADD POPULAR STOCK TO WATCHLIST MODAL */}
-      {showAddToWatchlistModal && selectedPopularStock && (
-        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4" onClick={() => setShowAddToWatchlistModal(false)}>
-          <div className="bg-[#131722] rounded-2xl border border-[#2a2e39] w-full max-w-md shadow-2xl" onClick={(e) => e.stopPropagation()}>
-            {/* Header */}
-            <div className="p-5 border-b border-[#2a2e39] flex justify-between items-center">
-              <h2 className="text-lg font-bold text-white">Add to Watchlist</h2>
-              <button onClick={() => setShowAddToWatchlistModal(false)} className="text-[#787b86] hover:text-white">
-                <X size={20} />
-              </button>
-            </div>
-            
-            {/* Body */}
-            <div className="p-5 space-y-4">
-              {/* Stock Info */}
-              <div className="flex items-center gap-3 bg-[#1e222d] p-3 rounded-lg">
-                <div className="w-10 h-10 rounded bg-[#2a2e39] flex items-center justify-center text-sm font-bold text-white">
-                  {selectedPopularStock.symbol[0]}
-                </div>
-                <div>
-                  <div className="font-bold text-white">{selectedPopularStock.symbol.replace('.NS', '')}</div>
-                  <div className="text-xs text-[#787b86]">₹{selectedPopularStock.price.toFixed(2)}</div>
-                </div>
-              </div>
-
-              {/* Watchlist Checkboxes */}
-              <div>
-                <label className="text-sm text-[#787b86] mb-3 block font-medium">Select watchlists</label>
-                <div className="space-y-2 bg-[#0f1118] rounded-lg p-3 max-h-64 overflow-y-auto">
-                  {allWatchlists.length === 0 ? (
-                    <p className="text-xs text-[#787b86] text-center py-4">No watchlists yet. Create one first.</p>
-                  ) : (
-                    allWatchlists.map((wl) => (
-                      <label key={wl.id} className="flex items-center gap-3 p-2 hover:bg-[#1e222d] rounded cursor-pointer transition-colors">
-                        <input
-                          type="checkbox"
-                          checked={selectedWatchlistIds.has(wl.id)}
-                          onChange={(e) => {
-                            const newSet = new Set(selectedWatchlistIds)
-                            if (e.target.checked) {
-                              newSet.add(wl.id)
-                            } else {
-                              newSet.delete(wl.id)
-                            }
-                            setSelectedWatchlistIds(newSet)
-                          }}
-                          className="w-4 h-4 rounded accent-[#2962ff]"
-                        />
-                        <div className="flex-1">
-                          <div className="text-sm text-white font-medium">{wl.watchlist_name}</div>
-                          <div className="text-xs text-[#787b86]">{wl.symbol?.length || 0} symbols</div>
-                        </div>
-                      </label>
-                    ))
-                  )}
-                </div>
-              </div>
-
-              {/* Create New Watchlist */}
-              <button
-                onClick={() => {
-                  setShowAddToWatchlistModal(false)
-                  setShowCreateModal(true)
-                }}
-                className="w-full py-2.5 bg-[#1e222d] border border-[#2a2e39] text-[#787b86] hover:text-white hover:border-[#2962ff] rounded-lg transition-colors font-medium text-sm flex items-center justify-center gap-2"
-              >
-                <Plus size={16} /> New Watchlist
-              </button>
-            </div>
-
-            {/* Footer Buttons */}
-            <div className="p-5 border-t border-[#2a2e39] flex gap-3 justify-end">
-              <button
-                onClick={() => setShowAddToWatchlistModal(false)}
-                className="px-6 py-2 bg-[#2a2e39] text-white rounded-lg hover:bg-[#3a3e49] transition-colors font-medium text-sm"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={async () => {
-                  if (selectedWatchlistIds.size === 0) {
-                    showToast('❌ Select at least one watchlist', 'error')
-                    return
-                  }
-                  
-                  setAddingToWatchlist(true)
-                  let successCount = 0
-                  
-                  for (const watchlistId of selectedWatchlistIds) {
-                    const success = await addSymbolToBackend(watchlistId, selectedPopularStock.symbol)
-                    if (success) successCount++
-                  }
-                  
-                  setAddingToWatchlist(false)
-                  
-                  if (successCount === selectedWatchlistIds.size) {
-                    showToast(`✅ Added to ${successCount} watchlist${successCount > 1 ? 's' : ''}`, 'success')
-                    setShowAddToWatchlistModal(false)
-                  } else {
-                    showToast(`⚠️ Added to ${successCount}/${selectedWatchlistIds.size} watchlists`, 'error')
-                  }
-                }}
-                disabled={addingToWatchlist || selectedWatchlistIds.size === 0}
-                className="px-6 py-2 bg-[#2962ff] text-white rounded-lg hover:bg-[#1e53e5] disabled:opacity-50 disabled:cursor-not-allowed transition-colors font-medium text-sm"
-              >
-                {addingToWatchlist ? 'Adding...' : 'Save'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* DELETE WATCHLIST CONFIRMATION MODAL */}
-      {showDeleteModal && deleteTargetWatchlist && (
-        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4" onClick={() => { setShowDeleteModal(false); setDeleteTargetWatchlist(null) }}>
-          <div className="bg-[#131722] rounded-2xl border border-[#2a2e39] w-full max-w-md shadow-2xl" onClick={(e) => e.stopPropagation()}>
-            {/* Header */}
-            <div className="p-5 border-b border-[#2a2e39] flex justify-between items-center">
-              <h2 className="text-lg font-bold text-white">Remove Watchlist</h2>
-              <button onClick={() => { setShowDeleteModal(false); setDeleteTargetWatchlist(null) }} className="text-[#787b86] hover:text-white">
-                <X size={20} />
-              </button>
-            </div>
-            {/* Body */}
-            <div className="p-5 space-y-3">
-              <p className="text-sm text-[#d1d4dc]">Are you sure to remove <span className="font-semibold">{deleteTargetWatchlist.watchlist_name}</span>?</p>
-            </div>
-            {/* Footer */}
-            <div className="p-5 border-t border-[#2a2e39] flex gap-3 justify-end">
-              <button
-                onClick={() => { setShowDeleteModal(false); setDeleteTargetWatchlist(null) }}
-                className="px-6 py-2 bg-white text-[#131722] rounded-lg hover:bg-[#e6e6e6] transition-colors font-medium text-sm"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={async () => { 
-                  if (deleteTargetWatchlist) {
-                    await deleteWatchlist(deleteTargetWatchlist.id);
-                    setShowDeleteModal(false);
-                    setDeleteTargetWatchlist(null);
-                  }
-                }}
-                className="px-6 py-2 bg-[#2962ff] text-white rounded-lg hover:bg-[#1e53e5] transition-colors font-medium text-sm"
-              >
-                Remove
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* RENAME WATCHLIST MODAL */}
-      {showRenameModal && renamingWatchlistId !== null && (
-        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4" onClick={() => { setShowRenameModal(false); setRenamingWatchlistId(null) }}>
-          <div className="bg-[#131722] rounded-2xl border border-[#2a2e39] w-full max-w-sm shadow-2xl" onClick={(e) => e.stopPropagation()}>
-            {/* Header */}
-            <div className="p-5 border-b border-[#2a2e39] flex justify-between items-center">
-              <h2 className="text-lg font-bold text-white">Edit Watchlist Name</h2>
-              <button onClick={() => { setShowRenameModal(false); setRenamingWatchlistId(null) }} className="text-[#787b86] hover:text-white">
-                <X size={20} />
-              </button>
-            </div>
-            {/* Body */}
-            <div className="p-5 space-y-3">
-              <label className="text-sm text-[#787b86]">Watchlist Name</label>
-              <input
-                autoFocus
-                value={renameValue}
-                onChange={(e) => setRenameValue(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    renameWatchlist(renamingWatchlistId!, renameValue)
-                    setShowRenameModal(false)
-                  }
-                }}
-                className="w-full bg-[#1e222d] border border-[#2a2e39] text-white px-4 py-3 rounded-lg outline-none focus:border-[#2962ff]"
-                placeholder="Enter name"
-                maxLength={50}
-              />
-            </div>
-            {/* Footer */}
-            <div className="p-5 border-t border-[#2a2e39] flex gap-3 justify-end">
-              <button
-                onClick={() => { setShowRenameModal(false); setRenamingWatchlistId(null) }}
-                className="px-6 py-2 bg-[#2a2e39] text-white rounded-lg hover:bg-[#3a3e49] transition-colors font-medium text-sm"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => { renameWatchlist(renamingWatchlistId!, renameValue); setShowRenameModal(false) }}
-                className="px-6 py-2 bg-[#2962ff] text-white rounded-lg hover:bg-[#1e53e5] transition-colors font-medium text-sm"
-              >
-                Save
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </>
   )
 }
