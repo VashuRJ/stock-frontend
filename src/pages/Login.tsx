@@ -15,10 +15,10 @@ export default function Login() {
     setLoading(true)
     try {
       const res = await api.post('/auth/login', { email, password })
-      const { access_token, user } = res.data
+      const { access_token, token, user } = res.data
       
       // Save to localStorage
-      localStorage.setItem('access_token', access_token)
+      localStorage.setItem('access_token', access_token || token)
       localStorage.setItem('user_id', user.id?.toString() || '')
       localStorage.setItem('user_name', user.full_name || email.split('@')[0])
       localStorage.setItem('user_email', user.email || '')
@@ -33,7 +33,7 @@ export default function Login() {
   }
 
   return (
-    <div className="min-h-screen flex bg-[#0e1117] text-[#d1d4dc] font-sans selection:bg-[#2962ff] selection:text-white">
+    <div className="min-h-screen flex bg-[#3d4963] text-[#d1d4dc] font-sans selection:bg-[#2962ff] selection:text-white">
       
       {/* --- LEFT SIDE: PREMIUM IMAGE --- */}
       <div className="hidden lg:block w-1/2 relative overflow-hidden">
@@ -69,13 +69,13 @@ export default function Login() {
             <form onSubmit={submit} className="space-y-5">
               
               <div className="space-y-1.5">
-                <label className="text-xs font-medium text-[#787b86] uppercase tracking-wide ml-1">Email Address</label>
+                <label className="text-xs font-medium text-[#ffffff] uppercase tracking-wide ml-1">Email Address</label>
                 <div className="relative">
                   <input
                     type="email"
                     value={email}
                     onChange={e => setEmail(e.target.value)}
-                    className="w-full bg-[#0e1117] border border-[#2a2e39] text-white text-sm rounded-lg focus:ring-1 focus:ring-[#2962ff] focus:border-[#2962ff] p-3 transition-all placeholder-[#2a2e39] focus:outline-none"
+                    className="w-full bg-white border border-[#2a2e39] text-black text-sm rounded-lg focus:ring-1 focus:ring-[#2962ff] focus:border-[#2962ff] p-3 transition-all placeholder-[#262627] focus:outline-none"
                     placeholder="Enter your email"
                     required
                   />
@@ -83,13 +83,13 @@ export default function Login() {
               </div>
 
               <div className="space-y-1.5">
-                <label className="text-xs font-medium text-[#787b86] uppercase tracking-wide ml-1">Password</label>
+                <label className="text-xs font-medium text-[#fefeff] uppercase tracking-wide ml-1">Password</label>
                 <div className="relative">
                   <input
                     type="password"
                     value={password}
                     onChange={e => setPassword(e.target.value)}
-                    className="w-full bg-[#0e1117] border border-[#2a2e39] text-white text-sm rounded-lg focus:ring-1 focus:ring-[#2962ff] focus:border-[#2962ff] p-3 transition-all placeholder-[#2a2e39] focus:outline-none"
+                    className="w-full bg-white border border-[#2a2e39] text-black text-sm rounded-lg focus:ring-1 focus:ring-[#2962ff] focus:border-[#2962ff] p-3 transition-all placeholder-[#9aa0a6] focus:outline-none"
                     placeholder="••••••••"
                     required
                   />

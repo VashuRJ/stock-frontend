@@ -295,7 +295,7 @@ export default function Dashboard() {
 
   // --- API HELPER FUNCTIONS ---
 
-  // 1. Fetch Single Stock
+  // 1. Fetch Single Stock (REAL data from backend)
   const fetchStock = async (symbol: string) => {
     try {
       const res = await api.get(`/stocks/price/${symbol}`)
@@ -304,18 +304,18 @@ export default function Dashboard() {
       const name = cleanCompanyName(data.name || symbol)
       
       const price = data.price || 0
-      const prevClose = data.previousClose || (price * 0.99) 
+      const prevClose = data.previousClose || price
       const change = price - prevClose
-      const changeP = ((price - prevClose) / prevClose) * 100
+      const changeP = prevClose > 0 ? ((price - prevClose) / prevClose) * 100 : 0
 
       return {
         symbol: symbol,
         price: price,
         change: change,
         changePercent: changeP,
-        volume: data.volume || Math.floor(Math.random() * 1000000), 
-        high: data.high || price * 1.01,
-        low: data.low || price * 0.99,
+        volume: data.volume || 0,
+        high: data.high || price,
+        low: data.low || price,
         previousClose: prevClose,
         name: name,
         sector: data.sector,
@@ -329,41 +329,85 @@ export default function Dashboard() {
     }
   }
 
-  // 2. Fetch Real Historical Data (Professional Implementation)
-  const fetchHistoricalData = async (symbol: string, currentPrice: number, interval: string = '5m', period: string = '1d') => {
+  // 2. Fetch Real Historical Data (ONLY from DB - No Fallback)
+  const fetchHistoricalData = async (symbol: string, interval: string = '1D') => {
     try {
       setLoading(true)
       setError(null)
       
-      console.log(`📈 Fetching historical data for ${symbol} at price: ₹${currentPrice}`)
+      console.log(`📈 Fetching real historical data for ${symbol} from database`)
       
-      // Try to fetch from backend historical endpoint
+      // For 1D, use intraday endpoint to show today's live candles
+      if (interval === '1D') {
+        try {
+          const intradayRes = await api.get(`/stocks/intraday/${symbol}`)
+          const iData = (intradayRes.data || []).map((item: any) => {
+            const ts = new Date(item.date).getTime()
+            const timeLabel = new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            return {
+              time: timeLabel,
+              timestamp: ts,
+              price: item.close,
+              open: item.open,
+              high: item.high,
+              low: item.low,
+              close: item.close,
+              volume: item.volume,
+            }
+          })
+          if (iData.length) return iData
+        } catch (e) {
+          console.warn('Intraday fetch failed, falling back to daily', e)
+        }
+      }
+
+      // Map UI timeframe to number of days the backend should return
+      const daysByInterval: Record<string, number> = {
+        '1D': 7,   // short window but a few candles for context
+        '1W': 14,
+        '1M': 30,
+        '3M': 90,
+        '6M': 180,
+        '1Y': 365,
+      }
+
+      const days = daysByInterval[interval] ?? 365
+
+      // Fetch from backend — returns REAL daily_data from DB
       const res = await api.get(`/stocks/historical/${symbol}`, {
-        params: { interval, period }
+        params: { days }
       })
       
-      if (res.data && res.data.length > 0) {
-        const formattedData = res.data.map((item: any) => ({
-          time: new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          timestamp: item.timestamp,
+      if (!res.data || res.data.length === 0) {
+        throw new Error('No historical data available')
+      }
+
+      // Format real data from DB
+      const formattedData = res.data.map((item: any) => {
+        const dateValue = item.date || item.timestamp || item.time
+        const ts = dateValue ? new Date(dateValue).getTime() : Date.now()
+        const timeLabel = new Date(ts).toLocaleDateString([], { month: 'short', day: 'numeric' })
+
+        return {
+          time: timeLabel,
+          timestamp: ts,
           price: item.close,
           open: item.open,
           high: item.high,
           low: item.low,
           close: item.close,
           volume: item.volume
-        }))
-        console.log(`✅ Got ${formattedData.length} historical data points from API`)
-        return formattedData
-      }
+        }
+      })
       
-      // Fallback: Generate realistic mock data if API not available
-      console.log(`⚠️ API unavailable, generating realistic data with base price: ₹${currentPrice}`)
-      return generateRealisticChart(currentPrice, interval)
+      console.log(`✅ Got ${formattedData.length} REAL candles from database`)
+      return formattedData
       
-    } catch (err) {
-      console.warn(`⚠️ Historical API error for ${symbol}, using generated data with price: ₹${currentPrice}`)
-      return generateRealisticChart(currentPrice, interval)
+    } catch (err: any) {
+      const errMsg = err?.response?.data?.detail || err.message || 'No data'
+      console.error('❌ Historical data error:', errMsg)
+      setError(`📊 ${errMsg} — Database may not have data yet. Run: python -m service.historical_fetch`)
+      return []
     } finally {
       setLoading(false)
     }
@@ -753,10 +797,18 @@ export default function Dashboard() {
           console.log(`✅ Stock data loaded for ${selectedSymbol}: ₹${data.price}`)
           setStockData(data)
           
-          // NOW fetch historical data with CORRECT current price
-          const historicalData = await fetchHistoricalData(selectedSymbol, data.price, timeframe)
-          console.log(`✅ Chart data loaded: ${historicalData.length} points`)
-          setChartData(historicalData)
+          // NOW fetch REAL historical data from database
+          const historicalData = await fetchHistoricalData(selectedSymbol, timeframe)
+
+          // If backend returned nothing, fall back to synthetic so UI still updates
+          if (!historicalData.length) {
+            const synthetic = generateRealisticChart(data.price, timeframe)
+            console.log(`⚠️ No real data, using synthetic: ${synthetic.length} points`)
+            setChartData(synthetic)
+          } else {
+            console.log(`✅ Chart data loaded: ${historicalData.length} points`)
+            setChartData(historicalData)
+          }
         } else {
           setError('Unable to fetch stock data')
         }
