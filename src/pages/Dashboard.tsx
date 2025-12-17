@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { 
   AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, Line, LineChart
 } from 'recharts'
-import LightweightCandle from '@/components/LightweightCandle'
+import EChartCandle from '@/components/EChartCandle'
 import { 
   Search, Bell, User, Plus, Activity, TrendingUp, TrendingDown, LogOut, X, Check,
   ChevronRight, ChevronDown, Pencil, Trash2, CheckCircle2
@@ -501,21 +501,48 @@ export default function Dashboard() {
   const loadTopMovers = async (indexName: string, topN: number = 5) => {
     try {
       setLoadingMovers(true)
-      // indexName should match backend keys like 'NIFTY50' or 'BANKNIFTY'
-      const res = await api.get(`/indices/${encodeURIComponent(indexName)}`)
-      const items = Array.isArray(res.data) ? res.data : []
-      const symbols: string[] = items.map((it: any) => it.stock_symbol || it.stockSymbol || it.symbol).filter(Boolean)
+      // Use server-side computed top gainers/losers endpoints (faster & authoritative)
+      const [gRes, lRes] = await Promise.all([
+        api.get(`/indices/${encodeURIComponent(indexName)}/gainers`, { params: { limit: topN } }),
+        api.get(`/indices/${encodeURIComponent(indexName)}/losers`, { params: { limit: topN } })
+      ])
 
-      // fetch prices for each symbol (careful: many requests)
-      const results = await Promise.all(symbols.map((s: string) => fetchStock(s)))
-      const stocks = results.filter(Boolean) as StockData[]
+      const gList = Array.isArray(gRes.data) ? gRes.data : []
+      const lList = Array.isArray(lRes.data) ? lRes.data : []
 
-      // sort by percent change
-      const sortedDesc = [...stocks].sort((a, b) => b.changePercent - a.changePercent)
-      const sortedAsc = [...stocks].sort((a, b) => a.changePercent - b.changePercent)
+      // Enrich server-side movers with live price/volume by fetching per-symbol
+      const enrich = async (items: any[]) => {
+        return Promise.all(items.map(async (it) => {
+          const symbol = it.stock_symbol || it.stockSymbol || it.symbol
+          try {
+            const fetched = await fetchStock(symbol)
+            if (fetched) {
+              return {
+                ...fetched,
+                changePercent: Number(it.percent_change ?? fetched.changePercent ?? 0)
+              } as StockData
+            }
+          } catch (e) {
+            console.warn('Failed to fetch price for', symbol, e)
+          }
+          // Fallback minimal object when fetch fails
+          return {
+            symbol,
+            name: it.stock_name || it.stockName || '',
+            price: 0,
+            change: 0,
+            changePercent: Number(it.percent_change ?? 0),
+            volume: 0,
+            high: 0,
+            low: 0,
+            previousClose: 0
+          } as StockData
+        }))
+      }
 
-      setGainers(sortedDesc.slice(0, topN))
-      setLosers(sortedAsc.slice(0, topN))
+      const [enrichedGainers, enrichedLosers] = await Promise.all([enrich(gList), enrich(lList)])
+      setGainers(enrichedGainers.slice(0, topN))
+      setLosers(enrichedLosers.slice(0, topN))
     } catch (err) {
       console.error('Failed to load top movers for index', indexName, err)
       showToast('Failed to load movers', 'error')
@@ -525,6 +552,30 @@ export default function Dashboard() {
   }
 
   // 2. Fetch Real Historical Data (ONLY from DB - No Fallback)
+  // Helper: convert a date string into UTC ms representing the same wall-clock time in given timezone
+  const epochForTimeZone = (dateValue: string | number | Date, timeZone: string = 'Asia/Kolkata') => {
+    const d = new Date(dateValue)
+    try {
+      const fmt = new Intl.DateTimeFormat('en-GB', {
+        timeZone,
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+      })
+      const parts = fmt.formatToParts(d)
+      const map: Record<string, number> = {}
+      parts.forEach(p => { if (p.type !== 'literal') map[p.type] = Number(p.value) })
+      const year = map['year']
+      const month = map['month'] - 1
+      const day = map['day']
+      const hour = map['hour']
+      const minute = map['minute']
+      const second = map['second']
+      return Date.UTC(year, month, day, hour, minute, second)
+    } catch (e) {
+      return new Date(dateValue).getTime()
+    }
+  }
+
   const fetchHistoricalData = async (symbol: string, interval: string = '1D') => {
     try {
       setLoading(true)
@@ -536,21 +587,30 @@ export default function Dashboard() {
       if (interval === '1D') {
         try {
           const intradayRes = await api.get(`/stocks/intraday/${symbol}`)
-          const iData = (intradayRes.data || []).map((item: any) => {
-            const ts = new Date(item.date).getTime()
-            const timeLabel = new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          const raw = (intradayRes.data || [])
+          // Convert timestamps to IST-aligned UTC epoch and filter to market hours
+          const iData = raw.map((item: any) => {
+            const istEpoch = epochForTimeZone(item.date, 'Asia/Kolkata') // UTC ms representing same wall time in IST
+            // derive IST hour/minute for filtering/label
+            const parts = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', hour12: false, hour: '2-digit', minute: '2-digit' }).format(new Date(item.date)).split(':')
+            const ih = Number(parts[0])
+            const im = Number(parts[1])
+            const minutesOfDay = ih * 60 + im
             return {
-              time: timeLabel,
-              timestamp: ts,
+              timeLabel: `${String(ih).padStart(2,'0')}:${String(im).padStart(2,'0')}`,
+              istEpoch,
               price: item.close,
               open: item.open,
               high: item.high,
               low: item.low,
               close: item.close,
               volume: item.volume,
+              minutesOfDay
             }
-          })
-          if (iData.length) return iData
+          }).filter((p: any) => p.minutesOfDay >= (9*60+15) && p.minutesOfDay <= (15*60+30))
+
+          const mapped = iData.map((d: any) => ({ time: d.timeLabel, timestamp: d.istEpoch, price: d.price, open: d.open, high: d.high, low: d.low, close: d.close, volume: d.volume }))
+          if (mapped.length) return mapped
         } catch (e) {
           console.warn('Intraday fetch failed, falling back to daily', e)
         }
@@ -849,10 +909,13 @@ export default function Dashboard() {
         const popularStocks = pResults.filter(Boolean) as StockData[]
         setPopularData(popularStocks)
         
-        // Calculate REAL Gainers & Losers
-        const sorted = [...popularStocks].sort((a, b) => b.changePercent - a.changePercent)
-        setGainers(sorted.slice(0, 3))
-        setLosers(sorted.slice(-3).reverse())
+        // Load real top movers from backend for the selected index (fallback to NIFTY50)
+        try {
+          await loadTopMovers(selectedIndexForMovers || 'NIFTY50', 3)
+        } catch (e) {
+          // If server-side movers fail, leave popular list as-is
+          console.warn('Failed to load server-side top movers on mount', e)
+        }
       } catch (err) {
         console.error('Failed to load popular stocks:', err)
       }
@@ -1122,7 +1185,7 @@ export default function Dashboard() {
                 </div>
               ) : chartType === 'candle' ? (
                 <div className="h-full w-full">
-                  <LightweightCandle data={chartDataWithIndicators} showVolume={showVolume} />
+                 <EChartCandle data={chartDataWithIndicators} showVolume={showVolume} />
                 </div>
               ) : (
                 /* Line Chart with Indicators Support */
