@@ -302,7 +302,7 @@ const WatchlistPanelComplete: React.FC<WatchlistPanelCompleteProps> = ({
       )}
 
       {/* Watchlist Panel */}
-      <div className="bg-[#0f1118] rounded-xl border border-[#1f2330] flex flex-col shadow-lg h-[40%] overflow-hidden">
+      <div className="bg-[#0f1118] rounded-xl border border-[#1f2330] flex flex-col shadow-lg h-[320px] min-h-0 overflow-hidden">
         <div className="p-3">
           <button
             onClick={() => setShowCreateModal(true)}

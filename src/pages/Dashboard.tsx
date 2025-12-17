@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { 
   AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, Line, LineChart
 } from 'recharts'
+import LightweightCandle from '@/components/LightweightCandle'
 import { 
   Search, Bell, User, Plus, Activity, TrendingUp, TrendingDown, LogOut, X, Check,
   ChevronRight, ChevronDown, Pencil, Trash2, CheckCircle2
@@ -9,7 +10,7 @@ import {
 import { useNavigate } from 'react-router-dom'
 import { api } from '@/api/client'
 import Navbar from '@/components/Navbar'
-import WatchlistPanelComplete from '@/components/dashboardpanel/WatchlistPanelComplete'
+import WatchlistPanelComplete from '@/dashboardpanel/WatchlistPanelComplete'
 
 // --- INTERFACES ---
 interface StockData {
@@ -48,12 +49,7 @@ interface WatchlistItem {
   symbol: string[]
 }
 
-interface WatchlistResponse {
-  id: number
-  email: string
-  watchlist_name: string
-  symbol: string[]
-}
+
 
 // Helper to format market cap in an Indian-friendly short form
 const formatMarketCap = (value?: number) => {
@@ -111,9 +107,9 @@ const Candlestick = (props: any) => {
   const bodyBottom = Math.max(yOpen, yClose)
   const bodyHeight = Math.max(Math.abs(bodyBottom - bodyTop), 1)
   
-  // PROFESSIONAL SETTINGS - Thick Candles like Zerodha/TradingView
-  const wickWidth = 2          // Wick thickness
-  const bodyWidth = width * 0.7  // Body takes 70% of available width (FAT!)
+  // PROFESSIONAL SETTINGS - TradingView-like candles
+  const wickWidth = Math.max(1, Math.min(2, width * 0.06))          // wick thickness relative to available width
+  const bodyWidth = Math.max(2, width * 0.6)  // Body width (60% of slot)
   const centerX = x + width / 2
   
   return (
@@ -126,6 +122,8 @@ const Candlestick = (props: any) => {
         y2={bodyTop}
         stroke={color}
         strokeWidth={wickWidth}
+        strokeLinecap="round"
+        opacity={0.95}
       />
       {/* Lower Wick (Body to Low) */}
       <line
@@ -135,6 +133,8 @@ const Candlestick = (props: any) => {
         y2={yLow}
         stroke={color}
         strokeWidth={wickWidth}
+        strokeLinecap="round"
+        opacity={0.95}
       />
       {/* Candle Body - THICK & PROFESSIONAL */}
       <rect
@@ -144,7 +144,7 @@ const Candlestick = (props: any) => {
         height={bodyHeight}
         fill={color}
         stroke={color}
-        strokeWidth={1}
+        strokeWidth={Math.max(0.6, wickWidth * 0.6)}
         rx={1}  // Slightly rounded corners
       />
     </g>
@@ -163,7 +163,7 @@ export default function Dashboard() {
   const [autoRefresh, setAutoRefresh] = useState(true)
   const [chartType, setChartType] = useState<'line' | 'candle'>('candle')
   const [timeframe, setTimeframe] = useState('1D')
-  const [showVolume, setShowVolume] = useState(true)
+  const [showVolume, setShowVolume] = useState(false)
   const [showIndicators, setShowIndicators] = useState(false)
   const [isFullscreen, setIsFullscreen] = useState(false) // NEW: Fullscreen mode
   
@@ -184,9 +184,71 @@ export default function Dashboard() {
   // Dynamic lists loaded from backend
   const [allStockSymbols, setAllStockSymbols] = useState<string[]>([])
   const [indicesSymbols, setIndicesSymbols] = useState<string[]>([])
+  const [indicesListNames, setIndicesListNames] = useState<string[]>([])
+  const [selectedIndexForMovers, setSelectedIndexForMovers] = useState<string>('NIFTY50')
+  const [loadingMovers, setLoadingMovers] = useState(false)
+
+  // Watchlist modal state (for Popular Stocks add-to-watchlist)
+  const [watchlistModalOpen, setWatchlistModalOpen] = useState(false)
+  const [watchlists, setWatchlists] = useState<WatchlistItem[]>([])
+  const [selectedWatchlistIds, setSelectedWatchlistIds] = useState<number[]>([])
+  const [modalSymbol, setModalSymbol] = useState<string | null>(null)
+  const [newWatchlistName, setNewWatchlistName] = useState('')
+  const [loadingWatchlists, setLoadingWatchlists] = useState(false)
+  const [savingWatchlist, setSavingWatchlist] = useState(false)
+
+  // prevent background scroll when fullscreen chart is open
+  React.useEffect(() => {
+    if (isFullscreen) {
+      const prev = document.body.style.overflow
+      document.body.style.overflow = 'hidden'
+      return () => { document.body.style.overflow = prev }
+    }
+    return
+  }, [isFullscreen])
+
+  // Global toast helper
   
   // Fallback for indices if backend not ready
   const INDICES_SYMBOLS = ['^NSEI', '^BSESN', '^NSEBANK', '^CNXIT']
+
+  // Load indices list from backend (/indices/list). Falls back to INDICES_SYMBOLS on error.
+  React.useEffect(() => {
+    let mounted = true
+    const load = async () => {
+      try {
+        const res = await api.get('/indices/list')
+        const data = Array.isArray(res.data) ? res.data : []
+        if (mounted) setIndicesListNames(data)
+        if (mounted && data.length > 0) {
+          // Map friendly index names to ticker symbols expected by fetchStock
+          const mapping: Record<string, string> = {
+            'NIFTY50': '^NSEI',
+            'NIFTY 50': '^NSEI',
+            'NIFTY 50 (NSE)': '^NSEI',
+            'NIFTY': '^NSEI',
+            'SENSEX': '^BSESN',
+            'BSE SENSEX': '^BSESN',
+            'BANKNIFTY': '^NSEBANK',
+            'BANK NIFTY': '^NSEBANK',
+            'NIFTY IT': '^CNXIT',
+            'NIFTYIT': '^CNXIT',
+          }
+
+          const mapped = data.map((item: string) => mapping[item] || item)
+          setIndicesSymbols(mapped)
+          return
+        }
+      } catch (err) {
+        console.warn('Failed to load indices list from backend, using fallback', err)
+      }
+
+      if (mounted) setIndicesSymbols(INDICES_SYMBOLS)
+    }
+
+    load()
+    return () => { mounted = false }
+  }, [])
 
   const stockDescriptor = useMemo(() => {
     const parts: string[] = []
@@ -211,28 +273,8 @@ export default function Dashboard() {
   // --- BACKEND DATA LOADERS ---
   
   // Load all stocks for search autocomplete
-  const loadStockList = async () => {
-    try {
-      const res = await api.get('/stocks/list')
-      const stocks = res.data
-      const symbols = stocks.map((s: any) => s.symbol)
-      setAllStockSymbols(symbols)
-    } catch (err) {
-      console.error('Failed to load stock list:', err)
-    }
-  }
   
   // Load indices list
-  const loadIndicesList = async () => {
-    try {
-      const res = await api.get('/indices/list')
-      const indices = res.data
-      setIndicesSymbols(indices)
-    } catch (err) {
-      console.error('Failed to load indices list:', err)
-      // Keep fallback
-    }
-  }
 
   // Suggestion helper via backend search
   const fetchStockSuggestions = async (query: string, limit: number = 10): Promise<string[]> => {
@@ -243,6 +285,81 @@ export default function Dashboard() {
     } catch (err) {
       console.error('Failed to fetch stock suggestions:', err)
       return []
+    }
+  }
+
+  // --- WATCHLIST HELPERS FOR MODAL ---
+  const loadWatchlists = async () => {
+    const email = localStorage.getItem('user_email')
+    if (!email) {
+      showToast('Please login to use watchlists', 'error')
+      return
+    }
+    try {
+      setLoadingWatchlists(true)
+      const res = await api.get(`/watchlist/detail/${email}`)
+      setWatchlists(res.data || [])
+    } catch (err) {
+      console.error('Failed to load watchlists:', err)
+      showToast('Failed to load watchlists', 'error')
+    } finally {
+      setLoadingWatchlists(false)
+    }
+  }
+
+  const toggleWatchlistSelection = (id: number) => {
+    setSelectedWatchlistIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    )
+  }
+
+  const openWatchlistModal = (symbol: string) => {
+    setModalSymbol(symbol)
+    setSelectedWatchlistIds([])
+    setNewWatchlistName('')
+    setWatchlistModalOpen(true)
+    loadWatchlists()
+  }
+
+  const saveToWatchlists = async () => {
+    const email = localStorage.getItem('user_email')
+    if (!email) {
+      showToast('Please login first', 'error')
+      return
+    }
+    if (!modalSymbol) return
+
+    try {
+      setSavingWatchlist(true)
+
+      // Add to selected existing watchlists
+      for (const id of selectedWatchlistIds) {
+        try {
+          await api.post(`/watchlist/${id}/add-symbol/${modalSymbol}`)
+        } catch (err: any) {
+          const msg = err?.response?.data?.detail || 'Failed to add symbol'
+          showToast(msg, 'error')
+          return
+        }
+      }
+
+      // Create new watchlist if name provided
+      const trimmed = newWatchlistName.trim()
+      if (trimmed) {
+        await api.post('/watchlist/', {
+          email,
+          watchlist_name: trimmed,
+          symbols: [modalSymbol],
+        })
+      }
+
+      showToast(`${modalSymbol.replace('.NS','')} added to watchlist`, 'success')
+      setWatchlistModalOpen(false)
+    } catch (err: any) {
+      const msg = err?.response?.data?.detail || 'Something went wrong'
+      showToast(msg, 'error')
+    } finally {
+      setSavingWatchlist(false)
     }
   }
 
@@ -279,6 +396,131 @@ export default function Dashboard() {
     } catch (err) {
       console.error("Error fetching", symbol, err)
       return null
+    }
+  }
+
+  // Build an index-level historical series by averaging constituents
+  const fetchIndexHistorical = async (indexTicker: string, interval: string = '1D') => {
+    try {
+      setLoading(true)
+      setError(null)
+
+      // map ticker to backend index key
+      const tickerToIndexKey: Record<string, string> = {
+        '^NSEI': 'NIFTY50',
+        '^BSESN': 'SENSEX',
+        '^NSEBANK': 'BANKNIFTY',
+        '^CNXIT': 'NIFTYIT'
+      }
+      const indexKey = tickerToIndexKey[indexTicker] || indexTicker.replace(/^\^/, '')
+
+      // fetch index members from backend
+      const membersRes = await api.get(`/indices/${encodeURIComponent(indexKey)}`)
+      const items = Array.isArray(membersRes.data) ? membersRes.data : []
+      const symbols: string[] = items.map((it: any) => it.stock_symbol || it.stockSymbol || it.symbol).filter(Boolean)
+
+      if (symbols.length === 0) return []
+
+      // limit number of members to avoid too many requests (configurable)
+      const maxMembers = 30
+      const selectedSymbols = symbols.slice(0, maxMembers)
+
+      // map timeframe -> days (reuse same mapping as historical fetch)
+      const daysByInterval: Record<string, number> = {
+        '1D': 0, '1W': 14, '1M': 30, '3M': 90, '6M': 180, '1Y': 365
+      }
+      const days = daysByInterval[interval] ?? 365
+
+      // fetch historical for each member (in parallel)
+      const resArr = await Promise.all(selectedSymbols.map(s =>
+        api.get(`/stocks/historical/${s}`, { params: { days } }).then(r => ({ symbol: s, data: Array.isArray(r.data) ? r.data : [] })).catch(() => ({ symbol: s, data: [] }))
+      ))
+
+      // build date->values map for open/high/low/close arrays
+      const dateMap: Record<string, { open: number[]; high: number[]; low: number[]; close: number[] }> = {}
+      resArr.forEach(({ symbol, data }) => {
+        data.forEach((row: any) => {
+          const dateValue = row.date ?? row.timestamp ?? row.time
+          const ts = dateValue ? new Date(dateValue).getTime() : null
+          if (!ts) return
+          const key = new Date(ts).toISOString().slice(0, 10)
+
+          const o = row.open ?? row.O ?? row.Open ?? null
+          const h = row.high ?? row.H ?? row.High ?? null
+          const l = row.low ?? row.L ?? row.Low ?? null
+          const c = row.close ?? row.close ?? row.price ?? row.Close ?? null
+
+          // ensure numeric
+          const on = o != null ? Number(o) : null
+          const hn = h != null ? Number(h) : null
+          const ln = l != null ? Number(l) : null
+          const cn = c != null ? Number(c) : null
+
+          if (cn == null) return
+          if (!dateMap[key]) dateMap[key] = { open: [], high: [], low: [], close: [] }
+          if (on != null) dateMap[key].open.push(on)
+          if (hn != null) dateMap[key].high.push(hn)
+          if (ln != null) dateMap[key].low.push(ln)
+          dateMap[key].close.push(cn)
+        })
+      })
+
+      // create sorted array of averaged points (ascending)
+      const keys = Object.keys(dateMap).sort((a, b) => new Date(a).getTime() - new Date(b).getTime())
+      const points = keys.map(k => {
+        const bucket = dateMap[k]
+        const avg = (arr: number[]) => arr.reduce((s, n) => s + n, 0) / (arr.length || 1)
+        const oAvg = bucket.open.length ? avg(bucket.open) : avg(bucket.close)
+        const hAvg = bucket.high.length ? avg(bucket.high) : avg(bucket.close)
+        const lAvg = bucket.low.length ? avg(bucket.low) : avg(bucket.close)
+        const cAvg = avg(bucket.close)
+        const ts = new Date(k).getTime()
+        return {
+          time: new Date(ts).toLocaleDateString([], { month: 'short', day: 'numeric' }),
+          timestamp: ts,
+          price: cAvg,
+          open: oAvg,
+          high: hAvg,
+          low: lAvg,
+          close: cAvg,
+          volume: 0,
+        }
+      })
+
+      return points
+    } catch (err) {
+      console.error('Index historical error:', err)
+      setError('Failed to build index historical data')
+      return []
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // --- TOP MOVERS (per-index) ---
+  const loadTopMovers = async (indexName: string, topN: number = 5) => {
+    try {
+      setLoadingMovers(true)
+      // indexName should match backend keys like 'NIFTY50' or 'BANKNIFTY'
+      const res = await api.get(`/indices/${encodeURIComponent(indexName)}`)
+      const items = Array.isArray(res.data) ? res.data : []
+      const symbols: string[] = items.map((it: any) => it.stock_symbol || it.stockSymbol || it.symbol).filter(Boolean)
+
+      // fetch prices for each symbol (careful: many requests)
+      const results = await Promise.all(symbols.map((s: string) => fetchStock(s)))
+      const stocks = results.filter(Boolean) as StockData[]
+
+      // sort by percent change
+      const sortedDesc = [...stocks].sort((a, b) => b.changePercent - a.changePercent)
+      const sortedAsc = [...stocks].sort((a, b) => a.changePercent - b.changePercent)
+
+      setGainers(sortedDesc.slice(0, topN))
+      setLosers(sortedAsc.slice(0, topN))
+    } catch (err) {
+      console.error('Failed to load top movers for index', indexName, err)
+      showToast('Failed to load movers', 'error')
+    } finally {
+      setLoadingMovers(false)
     }
   }
 
@@ -533,10 +775,16 @@ export default function Dashboard() {
           setStockData(data)
           
           // NOW fetch REAL historical data from database
-          const historicalData = await fetchHistoricalData(selectedSymbol, timeframe)
+          let historicalData: ChartPoint[] = []
+          if (selectedSymbol.startsWith('^')) {
+            // selected symbol is an index ticker (e.g., ^NSEI) — build index series from constituents
+            historicalData = await fetchIndexHistorical(selectedSymbol, timeframe)
+          } else {
+            historicalData = await fetchHistoricalData(selectedSymbol, timeframe)
+          }
 
-          // If backend returned nothing, fall back to synthetic so UI still updates
-          if (!historicalData.length) {
+          // If backend/aggregation returned nothing, fall back to synthetic so UI still updates
+          if (!historicalData || historicalData.length === 0) {
             const synthetic = generateRealisticChart(data.price, timeframe)
             console.log(`⚠️ No real data, using synthetic: ${synthetic.length} points`)
             setChartData(synthetic)
@@ -612,6 +860,14 @@ export default function Dashboard() {
     load()
   }, [])
 
+  // Load top movers for selected index when changed
+  useEffect(() => {
+    // ensure we have a selected index
+    if (selectedIndexForMovers) {
+      loadTopMovers(selectedIndexForMovers, 5)
+    }
+  }, [selectedIndexForMovers])
+
   // --- SEARCH HANDLERS (NEW) ---
   const handleSearch = async (value: string) => {
     setSearchQuery(value)
@@ -631,79 +887,15 @@ export default function Dashboard() {
   }
 
   // --- ACTIONS ---
-
+  
   const showToast = (message: string, type: 'success' | 'error') => {
     setToast({ message, type })
     setTimeout(() => setToast(null), 3000)
   }
+  
 
-  const handleWatchlistInput = async (value: string) => {
-    setNewWatchlistSymbol(value)
-    if (value.length > 0) {
-      const matches = await fetchStockSuggestions(value, 5)
-      setSuggestions(matches)
-    } else {
-      setSuggestions([])
-    }
-  }
 
-  const validateSymbol = (symbol: string): boolean => {
-    const upperSym = symbol.toUpperCase()
-    // Only allow symbols that exist in our database
-    return allStockSymbols.includes(upperSym)
-  }
 
-  const handleAddWatchlist = async (symbolOverride?: string) => {
-    const symbol = symbolOverride || newWatchlistSymbol
-    if (!symbol) return
-    
-    const upperSymbol = symbol.toUpperCase()
-    
-    // Validate symbol - must be from our database
-    if (!allStockSymbols.includes(upperSymbol)) {
-      showToast('❌ Invalid symbol! Please select from the suggestions', 'error')
-      return
-    }
-    
-    setAddingLoading(true)
-    
-    // Check if already exists
-    if (watchlistData.find(s => s.symbol === upperSymbol)) {
-      showToast('⚠️ Stock already in your watchlist', 'error')
-      setAddingLoading(false)
-      return
-    }
-    
-    // Add to backend first
-    if (currentWatchlist) {
-      console.log('Adding symbol:', upperSymbol, 'to watchlist ID:', currentWatchlist.id)
-      const success = await addSymbolToBackend(currentWatchlist.id, upperSymbol)
-      
-      if (success) {
-        // Fetch stock price and add to UI
-        const stock = await fetchStock(upperSymbol)
-        if (stock) {
-          setWatchlistData(prev => [stock, ...prev])
-          setCurrentWatchlist(prev => prev ? {...prev, symbol: [upperSymbol, ...prev.symbol]} : prev)
-          showToast(`✅ ${upperSymbol.replace('.NS', '')} added to watchlist`, 'success')
-          setNewWatchlistSymbol('')
-          setSuggestions([])
-          setIsAddingWatchlist(false)
-        } else {
-          showToast('❌ Unable to fetch stock data', 'error')
-        }
-      }
-    } else {
-      showToast('❌ Please login to add stocks', 'error')
-    }
-    
-    setAddingLoading(false)
-  }
-
-  const logout = () => {
-    localStorage.removeItem('access_token')
-    navigate('/login')
-  }
 
   const getColor = (val: number) => val >= 0 ? 'text-[#089981]' : 'text-[#f23645]'
   const getBg = (val: number) => val >= 0 ? 'bg-[#089981]/10' : 'bg-[#f23645]/10'
@@ -728,7 +920,7 @@ export default function Dashboard() {
         <div className="flex-1 overflow-y-auto p-4 grid grid-cols-12 gap-4">
         
         {/* ================= LEFT COLUMN: INDICES (Fixed Names) ================= */}
-        <div className="col-span-12 lg:col-span-3 flex flex-col gap-4">
+        <div className="col-span-12 lg:col-span-3 flex flex-col gap-4 min-h-0">
           <div className="bg-[#131722] rounded-xl border border-[#2a2e39] flex flex-col shadow-lg overflow-hidden h-full">
             <div className="p-4 border-b border-[#2a2e39] bg-[#1e222d] flex justify-between items-center">
               <h3 className="font-bold text-white text-sm flex items-center gap-2">📊 Major Indices</h3>
@@ -767,7 +959,10 @@ export default function Dashboard() {
         <div className="col-span-12 lg:col-span-6 flex flex-col gap-4">
           
           {/* Main Chart */}
-          <div className={`bg-[#131722] rounded-xl border border-[#2a2e39] p-4 shadow-lg flex flex-col transition-all ${isFullscreen ? 'fixed inset-4 z-50 h-auto' : 'h-[75%]'}`}>
+          {isFullscreen && (
+            <div className="fixed inset-0 bg-black/90 z-[9998]" onClick={() => setIsFullscreen(false)} />
+          )}
+          <div className={`bg-[#131722] ${isFullscreen ? 'rounded-none' : 'rounded-xl'} border border-[#2a2e39] p-4 shadow-lg flex flex-col transition-all ${isFullscreen ? 'fixed inset-0 z-[9999] m-0 p-6 overflow-auto' : 'h-[75%]'}`}>
             {/* Header with Search & Fullscreen */}
             <div className="flex justify-between items-start mb-3">
               <div className="flex-1">
@@ -818,8 +1013,16 @@ export default function Dashboard() {
                 
                 {/* Stock Info */}
                 <div>
-                  <div className="flex items-center gap-3 flex-wrap">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <h2 className="text-2xl font-bold text-white">{cleanCompanyName(stockData?.name) || selectedSymbol.replace('.NS', '')}</h2>
+                    <button
+                      onClick={() => openWatchlistModal(selectedSymbol)}
+                      className="bg-[#1b1e29] border border-[#2a2e39] px-2 py-1 rounded-md hover:border-[#2962ff] text-[#9aa0af] hover:text-white transition-colors flex items-center gap-1"
+                      title="Add to watchlist"
+                    >
+                      <Plus size={14} />
+                      <span className="text-xs font-semibold hidden sm:inline">Add</span>
+                    </button>
                   </div>
                   <div className="flex items-center gap-2">
                     <p className="text-xs text-[#787b86]">{stockDescriptor || 'NSE'}</p>
@@ -918,119 +1121,8 @@ export default function Dashboard() {
                   </div>
                 </div>
               ) : chartType === 'candle' ? (
-                /* Candlestick Chart with Volume */
-                <div className="h-full w-full flex flex-col gap-2">
-                  <div className="flex-1 relative">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart 
-                        data={chartDataWithIndicators} 
-                        barCategoryGap="10%" 
-                        barGap={1}
-                        margin={{ top: 5, right: 5, left: 5, bottom: 5 }}
-                      >
-                        <defs>
-                          <linearGradient id="gridGradient" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0%" stopColor="#2a2e39" stopOpacity="0.1" />
-                            <stop offset="100%" stopColor="#2a2e39" stopOpacity="0.05" />
-                          </linearGradient>
-                        </defs>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#2a2e39" vertical={false} opacity={0.3} />
-                        <XAxis 
-                          dataKey="time" 
-                          stroke="#50535e" 
-                          fontSize={10} 
-                          tickLine={false} 
-                          axisLine={{ stroke: '#2a2e39', strokeWidth: 1 }} 
-                          minTickGap={30}
-                          tick={{ fill: '#787b86' }}
-                        />
-                        <YAxis 
-                          orientation="right" 
-                          domain={[(dataMin: number) => Math.floor(dataMin * 0.998), (dataMax: number) => Math.ceil(dataMax * 1.002)]} 
-                          stroke="#50535e" 
-                          fontSize={10} 
-                          tickLine={false} 
-                          axisLine={{ stroke: '#2a2e39', strokeWidth: 1 }}
-                          tick={{ fill: '#787b86' }}
-                          tickFormatter={(value) => `₹${value.toFixed(0)}`}
-                        />
-                        <Tooltip 
-                          contentStyle={{ backgroundColor: '#1e222d', borderColor: '#2a2e39', color: '#fff', fontSize: 11 }} 
-                          content={({ payload }) => {
-                            if (payload && payload.length > 0) {
-                              const data = payload[0].payload as ChartPoint
-                              return (
-                                <div className="bg-[#1e222d] border border-[#2a2e39] p-2 rounded text-xs">
-                                  <p className="text-[#787b86]">{data.time}</p>
-                                  <p className="text-white">O: <span className="font-mono">₹{data.open?.toFixed(2)}</span></p>
-                                  <p className="text-white">H: <span className="font-mono text-[#089981]">₹{data.high?.toFixed(2)}</span></p>
-                                  <p className="text-white">L: <span className="font-mono text-[#f23645]">₹{data.low?.toFixed(2)}</span></p>
-                                  <p className="text-white">C: <span className="font-mono">₹{data.close?.toFixed(2)}</span></p>
-                                  {showIndicators && (
-                                    <>
-                                      {data.sma && <p className="text-[#ff9800] mt-1">SMA(20): ₹{data.sma.toFixed(2)}</p>}
-                                      {data.ema && <p className="text-[#2196f3]">EMA(12): ₹{data.ema.toFixed(2)}</p>}
-                                    </>
-                                  )}
-                                </div>
-                              )
-                            }
-                            return null
-                          }}
-                        />
-                        {/* Candlestick using custom shape */}
-                        <Bar 
-                          dataKey="high" 
-                          shape={Candlestick} 
-                          fill="transparent"
-                          isAnimationActive={false}
-                        />
-                        {/* Technical Indicators */}
-                        {showIndicators && (
-                          <>
-                            <Line type="monotone" dataKey="sma" stroke="#ff9800" strokeWidth={1.5} dot={false} name="SMA(20)" />
-                            <Line type="monotone" dataKey="ema" stroke="#2196f3" strokeWidth={1.5} dot={false} name="EMA(12)" />
-                          </>
-                        )}
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
-                  {showVolume && (
-                    <div className="h-24">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <BarChart data={chartDataWithIndicators}>
-                          <CartesianGrid strokeDasharray="3 3" stroke="#2a2e39" vertical={false} />
-                          <XAxis dataKey="time" stroke="#50535e" fontSize={8} tickLine={false} axisLine={false} hide />
-                          <YAxis orientation="right" stroke="#50535e" fontSize={8} tickLine={false} axisLine={false} />
-                          <Tooltip 
-                            contentStyle={{ backgroundColor: '#1e222d', borderColor: '#2a2e39', fontSize: 10 }} 
-                            formatter={(value: any) => [value.toLocaleString(), 'Volume']}
-                          />
-                          {/* Volume bars with color based on candle direction */}
-                          <Bar 
-                            dataKey="volume" 
-                            radius={[2, 2, 0, 0]}
-                            shape={(props: any) => {
-                              const { x, y, width, height, payload } = props
-                              // Green if close >= open, Red otherwise
-                              const isGreen = payload.close >= payload.open
-                              const color = isGreen ? '#26a69a' : '#ef5350'
-                              return (
-                                <rect
-                                  x={x}
-                                  y={y}
-                                  width={width}
-                                  height={height}
-                                  fill={color}
-                                  opacity={0.6}
-                                />
-                              )
-                            }}
-                          />
-                        </BarChart>
-                      </ResponsiveContainer>
-                    </div>
-                  )}
+                <div className="h-full w-full">
+                  <LightweightCandle data={chartDataWithIndicators} showVolume={showVolume} />
                 </div>
               ) : (
                 /* Line Chart with Indicators Support */
@@ -1096,6 +1188,22 @@ export default function Dashboard() {
           </div>
 
           {/* Movers Section - REAL DATA */}
+          <div className="flex items-center justify-between gap-3 mb-2">
+            <div className="flex items-center gap-2">
+              <label className="text-xs text-[#787b86]">Index:</label>
+              <select
+                value={selectedIndexForMovers}
+                onChange={(e) => setSelectedIndexForMovers(e.target.value)}
+                className="bg-[#1e222d] border border-[#2a2e39] px-2 py-1 rounded text-sm text-white"
+              >
+                {(indicesListNames.length ? indicesListNames : ['NIFTY50','BANKNIFTY','SENSEX']).map((nm) => (
+                  <option key={nm} value={nm}>{nm}</option>
+                ))}
+              </select>
+              {loadingMovers && <span className="text-xs text-[#787b86] ml-2">Loading...</span>}
+            </div>
+            <div className="text-xs text-[#787b86]">Top 5 movers</div>
+          </div>
           <div className="grid grid-cols-2 gap-4 h-[25%]">
             {/* Gainers */}
             <div className="bg-[#131722] rounded-xl border border-[#2a2e39] overflow-hidden flex flex-col">
@@ -1165,7 +1273,7 @@ export default function Dashboard() {
           />
 
           {/* Popular Stocks */}
-          <div className="bg-[#131722] rounded-xl border border-[#2a2e39] flex flex-col shadow-lg h-[65%] overflow-hidden">
+          <div className="bg-[#131722] rounded-xl border border-[#2a2e39] flex flex-col shadow-lg flex-1 min-h-0 overflow-hidden">
             <div className="p-4 border-b border-[#2a2e39] bg-[#1e222d] flex items-center justify-between">
               <h3 className="font-bold text-white text-sm flex items-center gap-2"><Activity size={16}/> Popular Stocks</h3>
               <span className="text-[10px] text-[#787b86]">{popularData.length} items</span>
@@ -1174,8 +1282,8 @@ export default function Dashboard() {
               {popularData.map((stock, i) => (
                 <div key={i} className="flex justify-between items-center p-3 mb-1 hover:bg-[#2a2e39] rounded transition-colors group">
                   <div onClick={() => setSelectedSymbol(stock.symbol)} className="flex-1 cursor-pointer flex items-center gap-3">
-                    <div className="w-8 h-8 rounded bg-[#2a2e39] flex items-center justify-center text-[10px] font-bold text-white group-hover:bg-[#2962ff] transition-colors">
-                      {stock.symbol[0]}
+                    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#2962ff] to-[#1e53e5] flex items-center justify-center text-xs font-bold text-white shadow-md group-hover:scale-110 transition-transform">
+                      {stock.symbol.substring(0, 2)}
                     </div>
                     <div>
                       <div className="text-sm font-bold text-white group-hover:text-[#2962ff]">{stock.symbol.replace('.NS', '')}</div>
@@ -1186,8 +1294,18 @@ export default function Dashboard() {
                   </div>
                   <div className="flex items-center gap-2">
                     <div className={`text-xs font-medium ${getColor(stock.change)}`}>
-                      {stock.change > 0 ? '+' : ''}{stock.change.toFixed(1)}%
+                      {stock.change > 0 ? '+' : ''}{stock.changePercent.toFixed(2)}%
                     </div>
+                    <button 
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        openWatchlistModal(stock.symbol)
+                      }}
+                      className="opacity-0 group-hover:opacity-100 transition-opacity bg-[#2962ff] hover:bg-[#1e53e5] text-white p-1.5 rounded-md"
+                      title="Add to watchlist"
+                    >
+                      <Plus size={14} />
+                    </button>
                   </div>
                 </div>
               ))}
@@ -1202,6 +1320,71 @@ export default function Dashboard() {
 
       </div>
       </div>
+
+      {/* Add to Watchlist Modal */}
+      {watchlistModalOpen && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4" onClick={() => setWatchlistModalOpen(false)}>
+          <div className="bg-[#131722] rounded-2xl border border-[#2a2e39] w-full max-w-md shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="p-4 border-b border-[#2a2e39] flex items-center justify-between">
+              <h3 className="text-white font-bold text-base">Add stock to watchlist</h3>
+              <button className="text-[#787b86] hover:text-white" onClick={() => setWatchlistModalOpen(false)}>
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="p-4 space-y-3 max-h-[60vh] overflow-y-auto">
+              {loadingWatchlists ? (
+                <p className="text-sm text-[#787b86]">Loading watchlists...</p>
+              ) : watchlists.length === 0 ? (
+                <p className="text-sm text-[#787b86]">No watchlists yet. Create a new one below.</p>
+              ) : (
+                watchlists.map((wl) => (
+                  <label key={wl.id} className="flex items-center gap-3 text-white text-sm bg-[#161a24] border border-[#2a2e39] rounded-lg px-3 py-2 cursor-pointer hover:border-[#2962ff]">
+                    <input
+                      type="checkbox"
+                      className="form-checkbox h-4 w-4 text-[#2962ff]"
+                      checked={selectedWatchlistIds.includes(wl.id)}
+                      onChange={() => toggleWatchlistSelection(wl.id)}
+                    />
+                    <div className="flex-1">
+                      <div className="font-semibold">{wl.watchlist_name}</div>
+                      <div className="text-[11px] text-[#787b86]">{wl.symbol?.length || 0} symbols</div>
+                    </div>
+                  </label>
+                ))
+              )}
+
+              <div className="border border-[#2a2e39] rounded-lg p-3 space-y-2 bg-[#10131c]">
+                <div className="text-xs text-[#9aa0af] font-semibold">+ New Watchlist</div>
+                <input
+                  type="text"
+                  value={newWatchlistName}
+                  onChange={(e) => setNewWatchlistName(e.target.value)}
+                  placeholder="Enter watchlist name"
+                  className="w-full bg-[#0f1118] border border-[#2a2e39] text-white px-3 py-2 rounded-lg outline-none focus:border-[#2962ff]"
+                  maxLength={50}
+                />
+              </div>
+            </div>
+
+            <div className="p-4 border-t border-[#2a2e39] flex gap-3">
+              <button
+                onClick={() => setWatchlistModalOpen(false)}
+                className="flex-1 bg-[#2a2e39] text-white py-2 rounded-lg font-semibold hover:bg-[#3a3f4f] transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={saveToWatchlists}
+                disabled={savingWatchlist}
+                className="flex-1 bg-[#2962ff] text-white py-2 rounded-lg font-semibold hover:bg-[#1e53e5] transition-colors disabled:opacity-50"
+              >
+                {savingWatchlist ? 'Saving...' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </>
   )
