@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { 
-  AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, Line, LineChart
+  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Line,
 } from 'recharts'
 import EChartCandle from '@/components/EChartCandle'
 import { 
@@ -40,7 +40,13 @@ interface ChartPoint {
   volume?: number
   sma?: number  // Simple Moving Average
   ema?: number  // Exponential Moving Average
+  bollinger?: {
+    upper: number
+    middle: number
+    lower: number
+  }
 }
+
 
 interface WatchlistItem {
   id: number
@@ -79,77 +85,20 @@ const cleanCompanyName = (name?: string) => {
   return cleaned || name
 }
 
-// Custom Candlestick Component - Professional TradingView Style
-const Candlestick = (props: any) => {
-  const { x, y, width, height, payload } = props
-  
-  if (!payload || !payload.open || !payload.high || !payload.low || !payload.close) {
-    return <g /> // Return empty SVG group
-  }
-  
-  const { open, high, low, close } = payload
-  const isGreen = close >= open
-  const color = isGreen ? '#26a69a' : '#ef5350'
-  
-  // Calculate Y positions (Recharts provides these automatically)
-  const yScale = (value: number) => {
-    const range = high - low || 1
-    const normalized = (high - value) / range
-    return y + normalized * height
-  }
-  
-  const yHigh = yScale(high)
-  const yLow = yScale(low)
-  const yOpen = yScale(open)
-  const yClose = yScale(close)
-  
-  const bodyTop = Math.min(yOpen, yClose)
-  const bodyBottom = Math.max(yOpen, yClose)
-  const bodyHeight = Math.max(Math.abs(bodyBottom - bodyTop), 1)
-  
-  // PROFESSIONAL SETTINGS - TradingView-like candles
-  const wickWidth = Math.max(1, Math.min(2, width * 0.06))          // wick thickness relative to available width
-  const bodyWidth = Math.max(2, width * 0.6)  // Body width (60% of slot)
-  const centerX = x + width / 2
-  
-  return (
-    <g>
-      {/* Upper Wick (High to Body) */}
-      <line
-        x1={centerX}
-        y1={yHigh}
-        x2={centerX}
-        y2={bodyTop}
-        stroke={color}
-        strokeWidth={wickWidth}
-        strokeLinecap="round"
-        opacity={0.95}
-      />
-      {/* Lower Wick (Body to Low) */}
-      <line
-        x1={centerX}
-        y1={bodyBottom}
-        x2={centerX}
-        y2={yLow}
-        stroke={color}
-        strokeWidth={wickWidth}
-        strokeLinecap="round"
-        opacity={0.95}
-      />
-      {/* Candle Body - THICK & PROFESSIONAL */}
-      <rect
-        x={x + (width - bodyWidth) / 2}
-        y={bodyTop}
-        width={bodyWidth}
-        height={bodyHeight}
-        fill={color}
-        stroke={color}
-        strokeWidth={Math.max(0.6, wickWidth * 0.6)}
-        rx={1}  // Slightly rounded corners
-      />
-    </g>
-  )
+// --- Formatting helpers ---
+const formatPrice = (p?: number) => {
+  if (p == null || !isFinite(p)) return '—'
+  return `₹${p.toFixed(2)}`
 }
+
+const formatPercent = (p?: number) => {
+  const n = Number(p)
+  if (!isFinite(n)) return '—'
+  const sign = n > 0 ? '+' : ''
+  return `${sign}${n.toFixed(2)}%`
+}
+
+
 
 export default function Dashboard() {
   const navigate = useNavigate()
@@ -164,7 +113,8 @@ export default function Dashboard() {
   const [chartType, setChartType] = useState<'line' | 'candle'>('candle')
   const [timeframe, setTimeframe] = useState('1D')
   const [showVolume, setShowVolume] = useState(false)
-  const [showIndicators, setShowIndicators] = useState(false)
+  const [activeIndicators, setActiveIndicators] = useState<string[]>([]) 
+  const [isIndicatorMenuOpen, setIsIndicatorMenuOpen] = useState(false)
   const [isFullscreen, setIsFullscreen] = useState(false) // NEW: Fullscreen mode
   
   // Search State
@@ -220,6 +170,12 @@ export default function Dashboard() {
         const res = await api.get('/indices/list')
         const data = Array.isArray(res.data) ? res.data : []
         if (mounted) setIndicesListNames(data)
+        // Ensure selectedIndexForMovers matches an available backend name
+        if (mounted && Array.isArray(data) && data.length > 0) {
+          if (!data.includes(selectedIndexForMovers)) {
+            setSelectedIndexForMovers(data[0])
+          }
+        }
         if (mounted && data.length > 0) {
           // Map friendly index names to ticker symbols expected by fetchStock
           const mapping: Record<string, string> = {
@@ -402,6 +358,8 @@ export default function Dashboard() {
   // Build an index-level historical series by averaging constituents
   const fetchIndexHistorical = async (indexTicker: string, interval: string = '1D') => {
     try {
+      // normalize interval casing coming from UI (e.g. '1d' -> '1D')
+      interval = (interval || '1D').toString().toUpperCase()
       setLoading(true)
       setError(null)
 
@@ -431,7 +389,84 @@ export default function Dashboard() {
       }
       const days = daysByInterval[interval] ?? 365
 
-      // fetch historical for each member (in parallel)
+      // Special-case: for 1D we should use intraday candles and aggregate across constituents
+      if (interval === '1D') {
+        // fetch intraday for each symbol in parallel
+        const resArr = await Promise.all(selectedSymbols.map(s =>
+          api.get(`/stocks/intraday/${s}`).then(r => ({ symbol: s, data: Array.isArray(r.data) ? r.data : [] })).catch(() => ({ symbol: s, data: [] }))
+        ))
+
+        // Build minute-level map across all members (IST-aligned)
+        const dateMap: Record<string, { open: number[]; high: number[]; low: number[]; close: number[]; volume: number }> = {}
+
+        resArr.forEach(({ symbol, data }) => {
+          data.forEach((row: any) => {
+            const dateValue = row.date ?? row.timestamp ?? row.time
+            const istEpoch = epochForTimeZone(dateValue, 'Asia/Kolkata') // UTC ms representing same wall time in IST
+            if (!istEpoch) return
+            const parts = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', hour12: false, hour: '2-digit', minute: '2-digit' }).format(new Date(dateValue)).split(':')
+            const ih = Number(parts[0])
+            const im = Number(parts[1])
+            const minutesOfDay = ih * 60 + im
+            // market hours IST 09:15 - 15:30
+            if (minutesOfDay < (9 * 60 + 15) || minutesOfDay > (15 * 60 + 30)) return
+
+            const key = `${String(ih).padStart(2, '0')}:${String(im).padStart(2, '0')}`
+            const o = row.open ?? row.O ?? row.Open ?? null
+            const h = row.high ?? row.H ?? row.High ?? null
+            const l = row.low ?? row.L ?? row.Low ?? null
+            const c = row.close ?? row.Close ?? row.price ?? null
+            const v = row.volume ?? 0
+
+            const on = o != null ? Number(o) : null
+            const hn = h != null ? Number(h) : null
+            const ln = l != null ? Number(l) : null
+            const cn = c != null ? Number(c) : null
+            const vn = Number(v) || 0
+
+            if (cn == null) return
+            if (!dateMap[key]) dateMap[key] = { open: [], high: [], low: [], close: [], volume: 0 }
+            if (on != null) dateMap[key].open.push(on)
+            if (hn != null) dateMap[key].high.push(hn)
+            if (ln != null) dateMap[key].low.push(ln)
+            dateMap[key].close.push(cn)
+            dateMap[key].volume += vn
+          })
+        })
+
+        // sort minute keys by time-of-day ascending
+        const keys = Object.keys(dateMap).sort((a, b) => {
+          const toMin = (s: string) => { const [hh, mm] = s.split(':').map(Number); return hh * 60 + mm }
+          return toMin(a) - toMin(b)
+        })
+
+        const points = keys.map(k => {
+          const bucket = dateMap[k]
+          const avg = (arr: number[]) => arr.reduce((s, n) => s + n, 0) / (arr.length || 1)
+          const oAvg = bucket.open.length ? avg(bucket.open) : avg(bucket.close)
+          const hAvg = bucket.high.length ? avg(bucket.high) : avg(bucket.close)
+          const lAvg = bucket.low.length ? avg(bucket.low) : avg(bucket.close)
+          const cAvg = avg(bucket.close)
+          // construct a timestamp for today at that minute in IST, converted to ms UTC
+          const today = new Date()
+          const [hh, mm] = k.split(':').map(Number)
+          const ts = epochForTimeZone(`${today.toISOString().slice(0,10)} ${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}:00`, 'Asia/Kolkata') || new Date().getTime()
+          return {
+            time: k,
+            timestamp: ts,
+            price: cAvg,
+            open: oAvg,
+            high: hAvg,
+            low: lAvg,
+            close: cAvg,
+            volume: bucket.volume,
+          }
+        })
+
+        return points
+      }
+
+      // fallback: daily historical fetch when not 1D
       const resArr = await Promise.all(selectedSymbols.map(s =>
         api.get(`/stocks/historical/${s}`, { params: { days } }).then(r => ({ symbol: s, data: Array.isArray(r.data) ? r.data : [] })).catch(() => ({ symbol: s, data: [] }))
       ))
@@ -501,14 +536,36 @@ export default function Dashboard() {
   const loadTopMovers = async (indexName: string, topN: number = 5) => {
     try {
       setLoadingMovers(true)
-      // Use server-side computed top gainers/losers endpoints (faster & authoritative)
-      const [gRes, lRes] = await Promise.all([
-        api.get(`/indices/${encodeURIComponent(indexName)}/gainers`, { params: { limit: topN } }),
-        api.get(`/indices/${encodeURIComponent(indexName)}/losers`, { params: { limit: topN } })
-      ])
+      // Try primary API call, but add logs and fallbacks if backend names differ
+      console.debug('Loading top movers for index:', indexName)
 
-      const gList = Array.isArray(gRes.data) ? gRes.data : []
-      const lList = Array.isArray(lRes.data) ? lRes.data : []
+      // helper to call endpoints and return arrays
+      const fetchFor = async (key: string) => {
+        try {
+          const [gRes, lRes] = await Promise.all([
+            api.get(`/indices/${encodeURIComponent(key)}/gainers`, { params: { limit: topN } }),
+            api.get(`/indices/${encodeURIComponent(key)}/losers`, { params: { limit: topN } })
+          ])
+          return [Array.isArray(gRes.data) ? gRes.data : [], Array.isArray(lRes.data) ? lRes.data : []] as [any[], any[]]
+        } catch (e) {
+          console.warn('Fetch movers failed for key', key, e)
+          return [[], []] as [any[], any[]]
+        }
+      }
+
+      // try candidate keys (exact, spaced, compact)
+      const candidates = [indexName, indexName.replace(/\s+/g, ''), indexName.replace(/\s+/g, ' '), indexName.toUpperCase()]
+      let gList: any[] = []
+      let lList: any[] = []
+      for (const k of candidates) {
+        const [g, l] = await fetchFor(k)
+        console.debug('Candidates attempt', k, '->', g.length, 'gainers,', l.length, 'losers')
+        if (g.length || l.length) {
+          gList = g
+          lList = l
+          break
+        }
+      }
 
       // Enrich server-side movers with live price/volume by fetching per-symbol
       const enrich = async (items: any[]) => {
@@ -529,17 +586,18 @@ export default function Dashboard() {
           return {
             symbol,
             name: it.stock_name || it.stockName || '',
-            price: 0,
-            change: 0,
+            price: Number.NaN,
+            change: Number.NaN,
             changePercent: Number(it.percent_change ?? 0),
             volume: 0,
-            high: 0,
-            low: 0,
-            previousClose: 0
+            high: Number.NaN,
+            low: Number.NaN,
+            previousClose: Number.NaN
           } as StockData
         }))
       }
 
+      console.debug('Server movers lists', { gList, lList })
       const [enrichedGainers, enrichedLosers] = await Promise.all([enrich(gList), enrich(lList)])
       setGainers(enrichedGainers.slice(0, topN))
       setLosers(enrichedLosers.slice(0, topN))
@@ -578,6 +636,8 @@ export default function Dashboard() {
 
   const fetchHistoricalData = async (symbol: string, interval: string = '1D') => {
     try {
+      // normalize interval casing coming from UI (e.g. '1d' -> '1D')
+      interval = (interval || '1D').toString().toUpperCase()
       setLoading(true)
       setError(null)
       
@@ -615,6 +675,7 @@ export default function Dashboard() {
           console.warn('Intraday fetch failed, falling back to daily', e)
         }
       }
+
 
       // Map UI timeframe to number of days the backend should return (for DAILY candles only)
       const daysByInterval: Record<string, number> = {
@@ -668,134 +729,71 @@ export default function Dashboard() {
     }
   }
 
-  // Fallback: Generate Realistic Chart Data
-  const generateRealisticChart = (basePrice: number, interval: string): ChartPoint[] => {
-    const data: ChartPoint[] = []
-    let price = basePrice
-    
-    // Get IST time (Indian market time)
-    const now = new Date()
-    const istTime = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }))
-    
-    // Determine points based on interval
-    const intervalMap: { [key: string]: { points: number, days: number } } = {
-      '1D': { points: 30, days: 1 },      // 30 days, daily candles
-      '1W': { points: 52, days: 7 },      // 1 year, weekly candles
-      '1M': { points: 12, days: 30 },     // 1 year, monthly candles
-      '3M': { points: 12, days: 90 },     // 3 years, quarterly candles
-      '6M': { points: 12, days: 180 },    // 6 years, bi-annual candles
-      '1Y': { points: 10, days: 365 }     // 10 years, yearly candles
-    }
-    
-    const config = intervalMap[interval] || { points: 30, days: 1 }
-    
-    // Calculate start time based on interval
-    let startTime = new Date(istTime)
-    startTime.setHours(15, 30, 0, 0) // Set to market close time
-    
-    // Go back by total days needed (points * days per candle)
-    const totalDays = config.points * config.days
-    startTime.setDate(startTime.getDate() - totalDays)
-    
-    let validPoints = 0
-    let dayCounter = 0
-    const maxIterations = config.points * 3 // Safety limit
-    
-    while (validPoints < config.points && dayCounter < maxIterations) {
-      const time = new Date(startTime.getTime() + dayCounter * config.days * 86400000)
-      dayCounter++
+// NEW: Individual Indicator Fetcher 
+  const fetchAndMergeIndicator = async (indicator: string, currentData: ChartPoint[]) => {
+    try {
+      if (currentData.length === 0) return currentData
+
+      // 1. Identify correct API route
+      let endpoint = ''
+      if (indicator === 'SMA') endpoint = `/sma/${selectedSymbol}`
+      else if (indicator === 'EMA') endpoint = `/ema/${selectedSymbol}`
+      else if (indicator === 'Bollinger') endpoint = `/bollinger/${selectedSymbol}`
+      else if (indicator === 'RSI') endpoint = `/rsi/${selectedSymbol}`
+      else if (indicator === 'MACD') endpoint = `/macd/${selectedSymbol}`
       
-      // Skip weekends for all timeframes
-      const day = time.getDay()
-      if (day === 0 || day === 6) continue
-      
-      const open = price
-      const volatility = basePrice * 0.008 // 0.8% volatility
-      const change = (Math.random() - 0.5) * volatility
-      const close = price + change
-      const high = Math.max(open, close) + Math.random() * (volatility * 0.3)
-      const low = Math.min(open, close) - Math.random() * (volatility * 0.3)
-      const volume = Math.floor(Math.random() * 1000000) + 500000
-      
-      // Format time based on interval
-      let timeLabel = ''
-      if (interval === '1Y') {
-        timeLabel = time.getFullYear().toString()
-      } else if (interval === '6M' || interval === '3M') {
-        timeLabel = time.toLocaleDateString([], { month: 'short', year: 'numeric' })
-      } else {
-        timeLabel = time.toLocaleDateString([], { month: 'short', day: 'numeric' })
-      }
-      
-      data.push({
-        time: timeLabel,
-        timestamp: time.getTime(),
-        price: close,
-        open,
-        high,
-        low,
-        close,
-        volume
+      if (!endpoint) return currentData
+
+      // 2. Fetch Data
+      console.log(`📥 Fetching ${indicator} from ${endpoint}...`)
+      const res = await api.get(endpoint)
+      const apiData = res.data || []
+
+      // 3. Create Map for fast merging (Match by Date)
+      const dataMap = new Map()
+      apiData.forEach((item: any) => {
+        // Backend 'date' or 'timestamp' ko safe format mein convert karo
+        const d = item.date || item.timestamp
+        const key = new Date(d).toLocaleDateString() // Match format with chartData
+        dataMap.set(key, item)
       })
-      price = close
-      validPoints++
+
+      // 4. Merge into existing chartData
+      return currentData.map(point => {
+        const pDate = new Date(point.timestamp!).toLocaleDateString()
+        const indVal = dataMap.get(pDate)
+
+        if (!indVal) return point // No data for this date
+
+        // Clone point and add new indicator data
+        const newPoint = { ...point }
+        
+        // Flexible Key Matching (Backend keys can vary)
+        if (indicator === 'SMA') newPoint.sma = indVal.SMA_20 || indVal.sma
+        if (indicator === 'EMA') newPoint.ema = indVal.EMA_20 || indVal.ema
+        if (indicator === 'RSI') newPoint.rsi = indVal.RSI_14 || indVal.rsi
+        if (indicator === 'Bollinger') {
+            newPoint.bollinger = {
+                upper: indVal.BBU_20_2_0 || indVal.bb_upper,
+                middle: indVal.BBM_20_2_0 || indVal.bb_middle,
+                lower: indVal.BBL_20_2_0 || indVal.bb_lower
+            }
+        }
+        if (indicator === 'MACD') {
+            newPoint.macd = {
+                macd: indVal.MACD_12_26_9 || indVal.macd,
+                signal: indVal.MACDs_12_26_9 || indVal.signal,
+                histogram: indVal.MACDh_12_26_9 || indVal.histogram
+            }
+        }
+        return newPoint
+      })
+
+    } catch (err) {
+      console.error(`Failed to load ${indicator}`, err)
+      return currentData
     }
-    
-    // CRITICAL FIX: Ensure last candle matches current EXACT price
-    const lastCandle = data[data.length - 1]
-    lastCandle.close = basePrice
-    lastCandle.price = basePrice
-    // Adjust high/low to include current price
-    lastCandle.high = Math.max(lastCandle.high || basePrice, basePrice)
-    lastCandle.low = Math.min(lastCandle.low || basePrice, basePrice)
-    
-    console.log(`📊 Generated ${data.length} candles for ${interval}. Last candle time: ${lastCandle.time}`, {
-      O: lastCandle.open?.toFixed(2),
-      H: lastCandle.high?.toFixed(2),
-      L: lastCandle.low?.toFixed(2),
-      C: lastCandle.close?.toFixed(2)
-    })
-    
-    return data
   }
-
-  // --- TECHNICAL INDICATORS (Professional Implementation) ---
-  
-  // Calculate Simple Moving Average (SMA)
-  const calculateSMA = (data: ChartPoint[], period: number = 20): ChartPoint[] => {
-    return data.map((point, index) => {
-      if (index < period - 1) {
-        return { ...point, sma: undefined }
-      }
-      const sum = data.slice(index - period + 1, index + 1).reduce((acc, p) => acc + p.close!, 0)
-      return { ...point, sma: sum / period }
-    })
-  }
-
-  // Calculate Exponential Moving Average (EMA)
-  const calculateEMA = (data: ChartPoint[], period: number = 20): ChartPoint[] => {
-    const k = 2 / (period + 1)
-    let ema = data[0].close!
-    
-    return data.map((point, index) => {
-      if (index === 0) {
-        return { ...point, ema }
-      }
-      ema = point.close! * k + ema * (1 - k)
-      return { ...point, ema }
-    })
-  }
-
-  // Memoize chart data with indicators for performance
-  const chartDataWithIndicators = useMemo(() => {
-    if (!showIndicators || chartData.length === 0) return chartData
-    
-    let processedData = [...chartData]
-    processedData = calculateSMA(processedData, 20)
-    processedData = calculateEMA(processedData, 12)
-    
-    return processedData
-  }, [chartData, showIndicators])
 
   // --- EFFECTS ---
 
@@ -845,13 +843,12 @@ export default function Dashboard() {
 
           // If backend/aggregation returned nothing, fall back to synthetic so UI still updates
           if (!historicalData || historicalData.length === 0) {
-            const synthetic = generateRealisticChart(data.price, timeframe)
-            console.log(`⚠️ No real data, using synthetic: ${synthetic.length} points`)
-            setChartData(synthetic)
-          } else {
-            console.log(`✅ Chart data loaded: ${historicalData.length} points`)
-            setChartData(historicalData)
-          }
+  console.log(`⚠️ No data available for ${selectedSymbol}`)
+  setChartData([]) // बस खाली array सेट करें, कोई error नहीं आएगा
+} else {
+  console.log(`✅ Chart data loaded: ${historicalData.length} points`)
+  setChartData(historicalData)
+}
         } else {
           setError('Unable to fetch stock data')
         }
@@ -886,6 +883,41 @@ export default function Dashboard() {
       }
     }
   }, [selectedSymbol, autoRefresh, timeframe])
+  
+  // NEW: Watch for Indicator Selection & Fetch Data
+  useEffect(() => {
+    const loadNewIndicators = async () => {
+      // अगर चार्ट खाली है या कोई इंडिकेटर सेलेक्ट नहीं है, तो कुछ मत करो
+      if (chartData.length === 0 || activeIndicators.length === 0) return
+
+      let updatedData = [...chartData]
+      let needsUpdate = false
+
+      for (const ind of activeIndicators) {
+        // चेक करो कि क्या डेटा पहले से मौजूद है? (Optimization)
+        const sample = updatedData[updatedData.length - 1]
+        const isMissing = 
+          (ind === 'SMA' && sample?.sma === undefined) ||
+          (ind === 'EMA' && sample?.ema === undefined) ||
+          (ind === 'RSI' && sample?.rsi === undefined) ||
+          (ind === 'MACD' && sample?.macd === undefined) ||
+          (ind === 'Bollinger' && sample?.bollinger === undefined)
+
+        // अगर डेटा नहीं है, तो अभी fetch करो
+        if (isMissing) {
+          updatedData = await fetchAndMergeIndicator(ind, updatedData)
+          needsUpdate = true
+        }
+      }
+
+      // अगर नया डेटा आया है, तो चार्ट अपडेट करो
+      if (needsUpdate) {
+        setChartData(updatedData)
+      }
+    }
+
+    loadNewIndicators()
+  }, [activeIndicators, selectedSymbol])
 
   // Load Indices
   useEffect(() => {
@@ -932,6 +964,11 @@ export default function Dashboard() {
   }, [selectedIndexForMovers])
 
   // --- SEARCH HANDLERS (NEW) ---
+  const toggleIndicator = (name: string) => {
+    setActiveIndicators(prev => 
+      prev.includes(name) ? prev.filter(i => i !== name) : [...prev, name]
+    )
+  }
   const handleSearch = async (value: string) => {
     setSearchQuery(value)
     if (value.length >= 1) {
@@ -1082,6 +1119,7 @@ export default function Dashboard() {
                       onClick={() => openWatchlistModal(selectedSymbol)}
                       className="bg-[#1b1e29] border border-[#2a2e39] px-2 py-1 rounded-md hover:border-[#2962ff] text-[#9aa0af] hover:text-white transition-colors flex items-center gap-1"
                       title="Add to watchlist"
+                      
                     >
                       <Plus size={14} />
                       <span className="text-xs font-semibold hidden sm:inline">Add</span>
@@ -1153,15 +1191,25 @@ export default function Dashboard() {
                 </button>
               </div>
 
-              {/* Indicators Toggle */}
-              <button
-                onClick={() => setShowIndicators(!showIndicators)}
-                className={`px-3 py-1 text-[10px] font-bold rounded ${
-                  showIndicators ? 'bg-[#089981] text-white' : 'bg-[#1e222d] text-[#787b86] hover:text-white'
-                }`}
-              >
-                📊 INDICATORS
-              </button>
+              {/* Indicators Toggle - Cleaned */}
+<button
+  onClick={() => setIsIndicatorMenuOpen(true)}
+  className={`
+    flex items-center gap-2 px-3 py-1.5 rounded-lg text-[11px] font-bold transition-all border
+    ${activeIndicators.length > 0 
+      ? 'bg-[#2962ff]/10 text-[#2962ff] border-[#2962ff]' 
+      : 'bg-[#1e222d] text-[#787b86] border-[#2a2e39] hover:text-white hover:border-[#787b86]'
+    }
+  `}
+>
+  <Activity size={14} />
+  <span>Indicators</span>
+  {activeIndicators.length > 0 && (
+    <span className="bg-[#2962ff] text-white px-1.5 rounded-full text-[9px] min-w-[16px] h-4 flex items-center justify-center">
+      {activeIndicators.length}
+    </span>
+  )}
+</button>
 
               <button
                 onClick={() => setShowVolume(!showVolume)}
@@ -1185,12 +1233,16 @@ export default function Dashboard() {
                 </div>
               ) : chartType === 'candle' ? (
                 <div className="h-full w-full">
-                 <EChartCandle data={chartDataWithIndicators} showVolume={showVolume} />
+                 <EChartCandle 
+                 data={chartData}
+                  showVolume={showVolume && !selectedSymbol.startsWith('^')} 
+                 activeIndicators={activeIndicators} //
+               />
                 </div>
               ) : (
                 /* Line Chart with Indicators Support */
                 <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={chartDataWithIndicators}>
+                  <AreaChart data={chartData}>
                     <defs>
                       <linearGradient id="colorPrice" x1="0" y1="0" x2="0" y2="1">
                         <stop offset="5%" stopColor="#2962ff" stopOpacity={0.3}/>
@@ -1217,10 +1269,10 @@ export default function Dashboard() {
                             <div className="bg-[#1e222d] border border-[#2a2e39] p-2 rounded text-xs">
                               <p className="text-[#787b86]">{data.time}</p>
                               <p className="text-white">Price: <span className="font-mono text-[#2962ff]">₹{data.price?.toFixed(2)}</span></p>
-                              {showIndicators && (
+                              {activeIndicators.length > 0 && ( // Check length instead
                                 <>
-                                  {data.sma && <p className="text-[#ff9800] mt-1">SMA(20): ₹{data.sma.toFixed(2)}</p>}
-                                  {data.ema && <p className="text-[#2196f3]">EMA(12): ₹{data.ema.toFixed(2)}</p>}
+                                  {activeIndicators.includes('SMA') && data.sma && <p className="text-[#ff9800] mt-1">SMA(20): ₹{data.sma.toFixed(2)}</p>}
+                                  {activeIndicators.includes('EMA') && data.ema && <p className="text-[#2196f3]">EMA(12): ₹{data.ema.toFixed(2)}</p>}
                                 </>
                               )}
                             </div>
@@ -1231,12 +1283,12 @@ export default function Dashboard() {
                     />
                     <Area type="monotone" dataKey="price" stroke="#2962ff" strokeWidth={2} fillOpacity={1} fill="url(#colorPrice)" />
                     {/* Technical Indicators for Line Chart */}
-                    {showIndicators && (
-                      <>
-                        <Line type="monotone" dataKey="sma" stroke="#ff9800" strokeWidth={2} dot={false} name="SMA(20)" strokeDasharray="5 5" />
-                        <Line type="monotone" dataKey="ema" stroke="#2196f3" strokeWidth={2} dot={false} name="EMA(12)" strokeDasharray="3 3" />
-                      </>
-                    )}
+                    {activeIndicators.length > 0 && (  //  Correct
+                  <>
+                    {activeIndicators.includes('SMA') && <Line type="monotone" dataKey="sma" stroke="#ff9800" strokeWidth={2} dot={false} name="SMA(20)" strokeDasharray="5 5" />}
+                    {activeIndicators.includes('EMA') && <Line type="monotone" dataKey="ema" stroke="#2196f3" strokeWidth={2} dot={false} name="EMA(12)" strokeDasharray="3 3" />}
+                  </>
+                )}
                   </AreaChart>
                 </ResponsiveContainer>
               )}
@@ -1265,7 +1317,7 @@ export default function Dashboard() {
               </select>
               {loadingMovers && <span className="text-xs text-[#787b86] ml-2">Loading...</span>}
             </div>
-            <div className="text-xs text-[#787b86]">Top 5 movers</div>
+            <div className="text-xs text-[#787b86]">{isMarketOpen() ? 'Top 5 movers' : 'Market Closed — showing last close movers'}</div>
           </div>
           <div className="grid grid-cols-2 gap-4 h-[25%]">
             {/* Gainers */}
@@ -1275,22 +1327,24 @@ export default function Dashboard() {
                 <h3 className="font-bold text-white text-xs uppercase">Top Gainers</h3>
               </div>
               <div className="p-2 overflow-y-auto flex-1">
-                {gainers.length > 0 ? gainers.map((s, i) => (
-                  <div 
-                    key={i} 
-                    onClick={() => setSelectedSymbol(s.symbol)}
-                    className="flex justify-between items-center p-2 mb-1 hover:bg-[#2a2e39] rounded cursor-pointer text-sm"
-                  >
-                    <div>
-                      <span className="text-white font-medium block">{s.symbol.replace('.NS', '')}</span>
-                      <span className="text-[10px] text-[#787b86]">₹{s.price.toFixed(2)}</span>
+                {loadingMovers ? (
+                  <div className="flex items-center justify-center h-full text-xs text-[#787b86]">Loading...</div>
+                ) : gainers.length === 0 ? (
+                  <div className="flex items-center justify-center h-full text-xs text-[#787b86]">No movers</div>
+                ) : (
+                  gainers.map((s, i) => (
+                    <div
+                      key={s.symbol || `g-${i}`}
+                      onClick={() => setSelectedSymbol(s.symbol)}
+                      className="flex justify-between items-center p-2 mb-1 hover:bg-[#2a2e39] rounded cursor-pointer text-sm"
+                    >
+                      <div>
+                        <span className="text-white font-medium block">{(s.symbol || '').replace('.NS', '')}</span>
+                        <span className="text-[10px] text-[#787b86]">{formatPrice(s.price)}</span>
+                      </div>
+                      <span className="text-[#089981] font-bold">{formatPercent(s.changePercent)}</span>
                     </div>
-                    <span className="text-[#089981] font-bold">+{s.changePercent.toFixed(2)}%</span>
-                  </div>
-                )) : (
-                  <div className="flex items-center justify-center h-full text-xs text-[#787b86]">
-                    Loading...
-                  </div>
+                  ))
                 )}
               </div>
             </div>
@@ -1302,22 +1356,24 @@ export default function Dashboard() {
                 <h3 className="font-bold text-white text-xs uppercase">Top Losers</h3>
               </div>
               <div className="p-2 overflow-y-auto flex-1">
-                {losers.length > 0 ? losers.map((s, i) => (
-                  <div 
-                    key={i}
-                    onClick={() => setSelectedSymbol(s.symbol)}
-                    className="flex justify-between items-center p-2 mb-1 hover:bg-[#2a2e39] rounded cursor-pointer text-sm"
-                  >
-                    <div>
-                      <span className="text-white font-medium block">{s.symbol.replace('.NS', '')}</span>
-                      <span className="text-[10px] text-[#787b86]">₹{s.price.toFixed(2)}</span>
+                {loadingMovers ? (
+                  <div className="flex items-center justify-center h-full text-xs text-[#787b86]">Loading...</div>
+                ) : losers.length === 0 ? (
+                  <div className="flex items-center justify-center h-full text-xs text-[#787b86]">No movers</div>
+                ) : (
+                  losers.map((s, i) => (
+                    <div
+                      key={s.symbol || `l-${i}`}
+                      onClick={() => setSelectedSymbol(s.symbol)}
+                      className="flex justify-between items-center p-2 mb-1 hover:bg-[#2a2e39] rounded cursor-pointer text-sm"
+                    >
+                      <div>
+                        <span className="text-white font-medium block">{(s.symbol || '').replace('.NS', '')}</span>
+                        <span className="text-[10px] text-[#787b86]">{formatPrice(s.price)}</span>
+                      </div>
+                      <span className="text-[#f23645] font-bold">{formatPercent(s.changePercent)}</span>
                     </div>
-                    <span className="text-[#f23645] font-bold">{s.changePercent.toFixed(2)}%</span>
-                  </div>
-                )) : (
-                  <div className="flex items-center justify-center h-full text-xs text-[#787b86]">
-                    Loading...
-                  </div>
+                  ))
                 )}
               </div>
             </div>
@@ -1449,6 +1505,91 @@ export default function Dashboard() {
         </div>
       )}
 
+   {/* ✅ PROFESSIONAL INDICATOR MODAL */}
+      {isIndicatorMenuOpen && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+          
+          <div className="bg-[#1e222d] w-[500px] max-h-[80vh] rounded-xl border border-[#2a2e39] shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-200">
+            
+            {/* Header */}
+            <div className="flex items-center justify-between p-4 border-b border-[#2a2e39]">
+              <div className="flex items-center gap-2 text-white font-bold">
+                <Search size={18} className="text-[#2962ff]" />
+                <span>Indicators & Strategies</span>
+              </div>
+              <button 
+                onClick={() => setIsIndicatorMenuOpen(false)}
+                className="p-1 hover:bg-[#2a2e39] rounded-md text-[#787b86] hover:text-white transition-colors"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* List Content */}
+            <div className="overflow-y-auto p-2 flex-1 custom-scrollbar">
+              
+              {/* Overlays */}
+              <div className="px-3 py-2 text-[11px] font-bold text-[#787b86] uppercase tracking-wider">Overlays</div>
+              <div className="space-y-1">
+                {['SMA', 'EMA', 'Bollinger'].map(ind => (
+                  <div 
+                    key={ind} 
+                    onClick={() => toggleIndicator(ind)}
+                    className="flex items-center justify-between px-4 py-3 rounded-lg hover:bg-[#2a2e39] cursor-pointer group transition-colors"
+                  >
+                    <div className="flex items-center gap-3">
+                       <div className={`p-1.5 rounded-md ${activeIndicators.includes(ind) ? 'bg-[#2962ff]/20 text-[#2962ff]' : 'bg-[#2a2e39] text-[#787b86] group-hover:text-white'}`}>
+                          <Activity size={16} />
+                       </div>
+                       <div className="flex flex-col">
+                          <span className={`text-sm font-medium ${activeIndicators.includes(ind) ? 'text-[#2962ff]' : 'text-[#d1d4dc]'}`}>{ind}</span>
+                          <span className="text-[10px] text-[#787b86]">Trend Indicator</span>
+                       </div>
+                    </div>
+                    {activeIndicators.includes(ind) ? (
+                       <button className="text-[#2962ff] bg-[#2962ff]/10 px-3 py-1 rounded-md text-xs font-bold">Active</button>
+                    ) : (
+                       <button className="opacity-0 group-hover:opacity-100 text-[#787b86] hover:text-[#2962ff]"><Plus size={18}/></button>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              {/* Oscillators */}
+              <div className="px-3 py-2 mt-4 text-[11px] font-bold text-[#787b86] uppercase tracking-wider">Oscillators</div>
+              <div className="space-y-1">
+                {['RSI', 'MACD'].map(ind => (
+                  <div 
+                    key={ind} 
+                    onClick={() => toggleIndicator(ind)}
+                    className="flex items-center justify-between px-4 py-3 rounded-lg hover:bg-[#2a2e39] cursor-pointer group transition-colors"
+                  >
+                    <div className="flex items-center gap-3">
+                       <div className={`p-1.5 rounded-md ${activeIndicators.includes(ind) ? 'bg-[#e040fb]/20 text-[#e040fb]' : 'bg-[#2a2e39] text-[#787b86] group-hover:text-white'}`}>
+                          <Activity size={16} />
+                       </div>
+                       <div className="flex flex-col">
+                          <span className={`text-sm font-medium ${activeIndicators.includes(ind) ? 'text-[#e040fb]' : 'text-[#d1d4dc]'}`}>{ind}</span>
+                          <span className="text-[10px] text-[#787b86]">Momentum Oscillator</span>
+                       </div>
+                    </div>
+                     {activeIndicators.includes(ind) ? (
+                       <button className="text-[#e040fb] bg-[#e040fb]/10 px-3 py-1 rounded-md text-xs font-bold">Active</button>
+                    ) : (
+                       <button className="opacity-0 group-hover:opacity-100 text-[#787b86] hover:text-[#e040fb]"><Plus size={18}/></button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="p-4 border-t border-[#2a2e39] bg-[#1e222d] text-center">
+               <button onClick={() => setIsIndicatorMenuOpen(false)} className="text-[#2962ff] text-sm font-bold hover:underline">Done</button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   )
 }
