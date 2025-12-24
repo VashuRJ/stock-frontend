@@ -49,11 +49,13 @@ export default function EChartCandle({ data, showVolume = true, showIndicators =
     }))
 
     // Indicators Data (Crash Proofing: Pass '-' instead of null/undefined)
-    const smaData = data.map(item => (item.sma !== undefined && item.sma !== null) ? item.sma : '-')
-    const emaData = data.map(item => (item.ema !== undefined && item.ema !== null) ? item.ema : '-')
-    
-    const bUpper = data.map(item => (item.bollinger && item.bollinger.upper != null) ? item.bollinger.upper : '-')
-    const bLower = data.map(item => (item.bollinger && item.bollinger.lower != null) ? item.bollinger.lower : '-')
+  const smaData = data.map(d => d.sma ?? null)
+  const emaData = data.map(d => d.ema ?? null)
+
+  const bUpper = data.map(d => d.bollinger?.upper ?? null)
+  const bMiddle = data.map(d => d.bollinger?.middle ?? null)
+  const bLower = data.map(d => d.bollinger?.lower ?? null)
+
 
     return {
       backgroundColor: '#131722',
@@ -167,40 +169,61 @@ export default function EChartCandle({ data, showVolume = true, showIndicators =
           data: volumes
         }] : []),
         
-        ...(showIndicators ? [
-          {
-            name: 'SMA(20)',
-            type: 'line',
-            data: smaData,
-            smooth: true,
-            symbol: 'none',
-            lineStyle: { width: 1, color: '#ff9800' }
-          },
-          {
-            name: 'EMA(12)',
-            type: 'line',
-            data: emaData,
-            smooth: true,
-            symbol: 'none',
-            lineStyle: { width: 1, color: '#2196f3' }
-          },
-          {
-            name: 'BB Upper',
-            type: 'line',
-            data: bUpper,
-            smooth: true,
-            symbol: 'none',
-            lineStyle: { width: 1, color: '#9c27b0', opacity: 0.5 }
-          },
-          {
-            name: 'BB Lower',
-            type: 'line',
-            data: bLower,
-            smooth: true,
-            symbol: 'none',
-            lineStyle: { width: 1, color: '#9c27b0', opacity: 0.5 }
-          }
-        ] : [])
+// 🔵 SMA & EMA (as-is)
+...(showIndicators ? [
+  {
+    name: 'SMA(20)',
+    type: 'line',
+    data: smaData,
+    smooth: true,
+    symbol: 'none',
+    lineStyle: { width: 2, color: '#ff9800' }
+  },
+  {
+    name: 'EMA(12)',
+    type: 'line',
+    data: emaData,
+    smooth: true,
+    symbol: 'none',
+    lineStyle: { width: 1, color: '#2196f3' }
+  }
+] : []),
+
+// 🟣 Bollinger Bands (ONLY if valid data exists)
+...(showIndicators && bUpper.some(v => v !== null) ? [
+{
+  name: 'BB Upper',
+  type: 'line',
+  data: bUpper,
+  connectNulls: true,
+  smooth: true,
+  symbol: 'none',
+  z: 5,                 //  IMPORTANT
+  yAxisIndex: 0,        //  IMPORTANT
+  lineStyle: {
+    width: 1.5,         //  slightly thicker
+    color: '#bb86fc',   //  brighter purple
+    opacity: 1
+  }
+},
+
+{
+  name: 'BB Lower',
+  type: 'line',
+  data: bLower,
+  connectNulls: true,
+  smooth: true,
+  symbol: 'none',
+  z: 5,
+  yAxisIndex: 0,
+  lineStyle: {
+    width: 1.5,
+    color: '#bb86fc',
+    opacity: 1
+  }
+}
+] : [])
+
       ]
     }
   }, [data, showVolume, showIndicators])
@@ -210,7 +233,8 @@ export default function EChartCandle({ data, showVolume = true, showIndicators =
         <ReactECharts 
             option={option} 
             style={{ height: '100%', width: '100%' }} 
-            notMerge={false} // Ye zaroori hai zoom fix ke liye
+            notMerge={true}
+            lazyUpdate={false}
         />
     </div>
   )

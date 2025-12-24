@@ -147,6 +147,12 @@ export default function Dashboard() {
   const [loadingWatchlists, setLoadingWatchlists] = useState(false)
   const [savingWatchlist, setSavingWatchlist] = useState(false)
 
+  // 🔹 Timeframe change handler (IMPORTANT)
+const handleTimeframeChange = (tf: string) => {
+  setTimeframe(tf)
+}
+
+
   // prevent background scroll when fullscreen chart is open
   React.useEffect(() => {
     if (isFullscreen) {
@@ -228,9 +234,6 @@ export default function Dashboard() {
 
   // --- BACKEND DATA LOADERS ---
   
-  // Load all stocks for search autocomplete
-  
-  // Load indices list
 
   // Suggestion helper via backend search
   const fetchStockSuggestions = async (query: string, limit: number = 10): Promise<string[]> => {
@@ -320,6 +323,69 @@ export default function Dashboard() {
   }
 
   // --- API HELPER FUNCTIONS ---
+  const loadSMA = async (symbol: string, data: ChartPoint[]) => {
+  const res = await api.get(`/sma/${symbol}`, { params: { period: 20 } })
+
+  const map = new Map<string, number>()
+  res.data.forEach((r: any) => {
+    if (r.date && r.SMA != null) {
+      map.set(r.date, r.SMA)
+    }
+  })
+
+  return data.map(p => {
+    const d = new Date(p.timestamp!).toISOString().slice(0, 10)
+    return map.has(d) ? { ...p, sma: map.get(d) } : p
+  })
+}
+
+// for EMA
+const loadEMA = async (symbol: string, data: ChartPoint[]) => {
+  const res = await api.get(`/ema/${symbol}`, { params: { period: 12 } })
+
+  const map = new Map<string, number>()
+  res.data.forEach((r: any) => {
+    if (r.date && r.EMA != null) {
+      map.set(r.date, r.EMA)
+    }
+  })
+
+  return data.map(p => {
+   const d = new Date(p.timestamp!).toLocaleDateString('en-CA')
+    return map.has(d) ? { ...p, ema: map.get(d) } : p
+  })
+}
+
+//for Bollinger indi
+const loadBollinger = async (symbol: string, data: ChartPoint[]) => {
+  const res = await api.get(`/bollinger/${symbol}`, {
+    params: { period: 20 }
+  })
+
+  const map = new Map<string, any>()
+  res.data.forEach((r: any) => {
+    if (r.date) {
+      map.set(r.date, r)
+    }
+  })
+
+  return data.map(p => {
+    const d = new Date(p.timestamp!).toISOString().slice(0, 10)
+    const bb = map.get(d)
+
+    return bb
+      ? {
+          ...p,
+          bollinger: {
+            upper: bb.upper,
+            middle: bb.middle,
+            lower: bb.lower,
+          },
+        }
+      : p
+  })
+}
+
 
   // 1. Fetch Single Stock (REAL data from backend)
   const fetchStock = async (symbol: string) => {
@@ -729,71 +795,68 @@ export default function Dashboard() {
     }
   }
 
-// NEW: Individual Indicator Fetcher 
-  const fetchAndMergeIndicator = async (indicator: string, currentData: ChartPoint[]) => {
-    try {
-      if (currentData.length === 0) return currentData
+// Dashboard.tsx ke andar ye function update karein
 
-      // 1. Identify correct API route
-      let endpoint = ''
-      if (indicator === 'SMA') endpoint = `/sma/${selectedSymbol}`
-      else if (indicator === 'EMA') endpoint = `/ema/${selectedSymbol}`
-      else if (indicator === 'Bollinger') endpoint = `/bollinger/${selectedSymbol}`
-      else if (indicator === 'RSI') endpoint = `/rsi/${selectedSymbol}`
-      else if (indicator === 'MACD') endpoint = `/macd/${selectedSymbol}`
-      
-      if (!endpoint) return currentData
+const fetchAndMergeIndicator = async (indicator: string, currentData: ChartPoint[]) => {
+  try {
+    if (currentData.length === 0) return currentData
 
-      // 2. Fetch Data
-      console.log(`📥 Fetching ${indicator} from ${endpoint}...`)
-      const res = await api.get(endpoint)
-      const apiData = res.data || []
+    // 1. Identify correct API route
+    let endpoint = ''
+    let period = 20 // Default period
 
-      // 3. Create Map for fast merging (Match by Date)
-      const dataMap = new Map()
-      apiData.forEach((item: any) => {
-        // Backend 'date' or 'timestamp' ko safe format mein convert karo
-        const d = item.date || item.timestamp
-        const key = new Date(d).toLocaleDateString() // Match format with chartData
-        dataMap.set(key, item)
-      })
-
-      // 4. Merge into existing chartData
-      return currentData.map(point => {
-        const pDate = new Date(point.timestamp!).toLocaleDateString()
-        const indVal = dataMap.get(pDate)
-
-        if (!indVal) return point // No data for this date
-
-        // Clone point and add new indicator data
-        const newPoint = { ...point }
-        
-        // Flexible Key Matching (Backend keys can vary)
-        if (indicator === 'SMA') newPoint.sma = indVal.SMA_20 || indVal.sma
-        if (indicator === 'EMA') newPoint.ema = indVal.EMA_20 || indVal.ema
-        if (indicator === 'RSI') newPoint.rsi = indVal.RSI_14 || indVal.rsi
-        if (indicator === 'Bollinger') {
-            newPoint.bollinger = {
-                upper: indVal.BBU_20_2_0 || indVal.bb_upper,
-                middle: indVal.BBM_20_2_0 || indVal.bb_middle,
-                lower: indVal.BBL_20_2_0 || indVal.bb_lower
-            }
-        }
-        if (indicator === 'MACD') {
-            newPoint.macd = {
-                macd: indVal.MACD_12_26_9 || indVal.macd,
-                signal: indVal.MACDs_12_26_9 || indVal.signal,
-                histogram: indVal.MACDh_12_26_9 || indVal.histogram
-            }
-        }
-        return newPoint
-      })
-
-    } catch (err) {
-      console.error(`Failed to load ${indicator}`, err)
+    if (indicator === 'SMA') {
+      endpoint = `/sma/${selectedSymbol}`
+      period = 20
+    }
+    // Baaki indicators ke liye baad mein add karenge (EMA, RSI etc)
+    else {
       return currentData
     }
+    
+    // 2. Fetch Data
+    console.log(`📥 Fetching ${indicator} from ${endpoint}...`)
+    const res = await api.get(endpoint, { params: { period } })
+    const apiData = res.data || []
+
+    // 3. Create Map for fast merging (Match by Date string YYYY-MM-DD)
+    // Aapka backend date "2025-03-05" format mein bhej raha hai
+    const dataMap = new Map()
+    
+    apiData.forEach((item: any) => {
+      // Backend se aa rahi date ko key banayenge
+      // item.date format: "2025-03-05"
+      if (item.date) {
+        dataMap.set(item.date, item) 
+      }
+    })
+
+    // 4. Merge into existing chartData
+    return currentData.map(point => {
+      // Chart point ke timestamp ko wapas YYYY-MM-DD string mein convert karte hain matching ke liye
+      const pointDate = new Date(point.timestamp!).toISOString().split('T')[0]
+      
+      const indVal = dataMap.get(pointDate)
+
+      // Clone point
+      const newPoint = { ...point }
+      
+      if (indVal) {
+        // SMA Key matching (Case sensitive check from your JSON)
+        if (indicator === 'SMA') {
+            // Aapke JSON mein key "SMA" hai
+            newPoint.sma = indVal.SMA || indVal.sma
+        }
+      }
+      
+      return newPoint
+    })
+
+  } catch (err) {
+    console.error(`Failed to load ${indicator}`, err)
+    return currentData
   }
+}
 
   // --- EFFECTS ---
 
@@ -818,106 +881,126 @@ export default function Dashboard() {
     return currentTime >= marketStart && currentTime <= marketEnd
   }
 
-  // Load Main Chart with Timeframe Support
-  useEffect(() => {
-    const loadMainChart = async () => {
-      console.log(`📊 Loading chart for: ${selectedSymbol}`)
-      setLoading(true)
-      setError(null)
-      
-      try {
-        // Fetch current stock data FIRST
-        const data = await fetchStock(selectedSymbol)
-        if (data) {
-          console.log(`✅ Stock data loaded for ${selectedSymbol}: ₹${data.price}`)
-          setStockData(data)
-          
-          // NOW fetch REAL historical data from database
-          let historicalData: ChartPoint[] = []
-          if (selectedSymbol.startsWith('^')) {
-            // selected symbol is an index ticker (e.g., ^NSEI) — build index series from constituents
-            historicalData = await fetchIndexHistorical(selectedSymbol, timeframe)
-          } else {
-            historicalData = await fetchHistoricalData(selectedSymbol, timeframe)
-          }
+ // Load Main Chart with Timeframe Support
+useEffect(() => {
+  const loadMainChart = async () => {
+    console.log(`📊 Loading chart for: ${selectedSymbol}`)
+    setLoading(true)
+    setError(null)
 
-          // If backend/aggregation returned nothing, fall back to synthetic so UI still updates
-          if (!historicalData || historicalData.length === 0) {
-  console.log(`⚠️ No data available for ${selectedSymbol}`)
-  setChartData([]) // बस खाली array सेट करें, कोई error नहीं आएगा
-} else {
-  console.log(`✅ Chart data loaded: ${historicalData.length} points`)
-  setChartData(historicalData)
-}
+    try {
+      const data = await fetchStock(selectedSymbol)
+      if (data) {
+        setStockData(data)
+
+        let historicalData: ChartPoint[] = []
+        if (selectedSymbol.startsWith('^')) {
+          historicalData = await fetchIndexHistorical(selectedSymbol, timeframe)
         } else {
-          setError('Unable to fetch stock data')
+          historicalData = await fetchHistoricalData(selectedSymbol, timeframe)
         }
-      } catch (err) {
-        console.error('Chart loading error:', err)
-        setError('Failed to load chart data')
-      } finally {
-        setLoading(false)
-      }
-    }
 
-    // Initial load
-    loadMainChart()
-    
-    // Cleanup previous interval
+        if (!historicalData || historicalData.length === 0) {
+          console.log(`⚠️ No data available for ${selectedSymbol}`)
+          setChartData([])
+        } else {
+          console.log(`✅ Chart data loaded: ${historicalData.length} points`)
+          setChartData(historicalData)
+
+          // 🔁 Re-apply indicators after timeframe change
+        if (activeIndicators.length > 0) {
+          setTimeout(() => {
+            // indicator useEffect ko naturally trigger karne ke liye
+            setActiveIndicators(prev => [...prev])
+          }, 0)
+        }
+
+        }
+      } else {
+        setError('Unable to fetch stock data')
+      }
+    } catch (err) {
+      console.error('Chart loading error:', err)
+      setError('Failed to load chart data')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // 🔹 Initial load
+  loadMainChart()
+
+  // 🔹 Auto-refresh ONLY for 1D timeframe
+  if (autoRefresh && isMarketOpen() && timeframe === '1D') {
+    console.log('🔄 Auto-refresh enabled (1D only)')
+    autoRefreshInterval.current = setInterval(loadMainChart, 5000)
+  }
+
+  // 🔹 Cleanup
+  return () => {
     if (autoRefreshInterval.current) {
       clearInterval(autoRefreshInterval.current)
     }
-    
-    // Setup auto-refresh ONLY if market is open AND autoRefresh is true
-    if (autoRefresh && isMarketOpen()) {
-      console.log('🔄 Auto-refresh enabled - Market is OPEN')
-      autoRefreshInterval.current = setInterval(loadMainChart, 5000)
-    } else if (!isMarketOpen()) {
-      console.log('⏸️ Auto-refresh disabled - Market is CLOSED')
-      setError('Market is closed. Showing last available data.')
-    }
-    
-    return () => {
-      if (autoRefreshInterval.current) {
-        clearInterval(autoRefreshInterval.current)
-      }
-    }
-  }, [selectedSymbol, autoRefresh, timeframe])
+  }
+}, [selectedSymbol, autoRefresh, timeframe])
+
   
-  // NEW: Watch for Indicator Selection & Fetch Data
-  useEffect(() => {
-    const loadNewIndicators = async () => {
-      // अगर चार्ट खाली है या कोई इंडिकेटर सेलेक्ट नहीं है, तो कुछ मत करो
-      if (chartData.length === 0 || activeIndicators.length === 0) return
+//  FINAL: Indicator Loader (ON / OFF properly works)
+useEffect(() => {
+  const loadIndicators = async () => {
+    if (chartData.length === 0) return
+    if (activeIndicators.length === 0) {
 
-      let updatedData = [...chartData]
-      let needsUpdate = false
-
-      for (const ind of activeIndicators) {
-        // चेक करो कि क्या डेटा पहले से मौजूद है? (Optimization)
-        const sample = updatedData[updatedData.length - 1]
-        const isMissing = 
-          (ind === 'SMA' && sample?.sma === undefined) ||
-          (ind === 'EMA' && sample?.ema === undefined) ||
-          (ind === 'RSI' && sample?.rsi === undefined) ||
-          (ind === 'MACD' && sample?.macd === undefined) ||
-          (ind === 'Bollinger' && sample?.bollinger === undefined)
-
-        // अगर डेटा नहीं है, तो अभी fetch करो
-        if (isMissing) {
-          updatedData = await fetchAndMergeIndicator(ind, updatedData)
-          needsUpdate = true
-        }
-      }
-
-      // अगर नया डेटा आया है, तो चार्ट अपडेट करो
-      if (needsUpdate) {
-        setChartData(updatedData)
-      }
+      setChartData(prev =>
+        prev.map(p => ({
+          ...p,
+          sma: undefined,
+          ema: undefined,
+          bollinger: undefined
+        }))
+      )
+      return
     }
 
-    loadNewIndicators()
-  }, [activeIndicators, selectedSymbol])
+    if (timeframe === '1D' || chartData.length < 25) return
+
+    // 🔥 OFF indicators ka data hatao
+    let updated = chartData.map(p => ({
+      ...p,
+      ...(activeIndicators.includes('SMA') ? {} : { sma: undefined }),
+      ...(activeIndicators.includes('EMA') ? {} : { ema: undefined }),
+      ...(activeIndicators.includes('Bollinger') ? {} : { bollinger: undefined }),
+    }))
+
+    // 🔥 ON indicators load karo
+    if (activeIndicators.includes('SMA')) {
+      updated = await loadSMA(selectedSymbol, updated)
+    }
+
+    if (activeIndicators.includes('EMA')) {
+      updated = await loadEMA(selectedSymbol, updated)
+    }
+
+   if (activeIndicators.includes('Bollinger')) {
+     if (chartData.length >= 20) {
+    updated = await loadBollinger(selectedSymbol, updated)
+  }
+}
+
+   const hasIndicatorData = updated.some(
+  p => p.sma !== undefined || p.ema !== undefined || p.bollinger !== undefined
+)
+
+if (!hasIndicatorData) return
+setChartData(updated)
+
+
+  }
+
+  loadIndicators()
+}, [activeIndicators, selectedSymbol, timeframe])
+
+
 
   // Load Indices
   useEffect(() => {
@@ -1159,7 +1242,7 @@ export default function Dashboard() {
                 {['1D', '1W', '1M', '3M', '6M', '1Y'].map(tf => (
                   <button
                     key={tf}
-                    onClick={() => setTimeframe(tf)}
+                    onClick={() => handleTimeframeChange(tf)}
                     className={`px-2 py-1 text-[10px] font-bold rounded transition-colors ${
                       timeframe === tf 
                         ? 'bg-[#2962ff] text-white' 
@@ -1236,8 +1319,8 @@ export default function Dashboard() {
                  <EChartCandle 
                  data={chartData}
                   showVolume={showVolume && !selectedSymbol.startsWith('^')} 
-                 activeIndicators={activeIndicators} //
-               />
+                 showIndicators={activeIndicators.length > 0}
+                />
                 </div>
               ) : (
                 /* Line Chart with Indicators Support */
