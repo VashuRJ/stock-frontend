@@ -45,6 +45,10 @@ interface ChartPoint {
     middle: number
     lower: number
   }
+  rsi?: number
+  macd?: number
+  macdSignal?: number
+  macdHist?: number
 }
 
 
@@ -150,6 +154,49 @@ export default function Dashboard() {
   // 🔹 Timeframe change handler (IMPORTANT)
 const handleTimeframeChange = (tf: string) => {
   setTimeframe(tf)
+}
+
+// 🔹 RSI indicator loader
+const loadRSI = async (symbol: string, data: ChartPoint[]) => {
+  const res = await api.get(`/rsi/${symbol}`, { params: { period: 14 } })
+
+  const map = new Map<string, number>()
+  res.data.forEach((r: any) => {
+    if (r.date && r.RSI != null) {
+      map.set(r.date, r.RSI)
+    }
+  })
+
+  return data.map(p => {
+    const d = new Date(p.timestamp!).toISOString().slice(0, 10)
+    return map.has(d) ? { ...p, rsi: map.get(d) } : p
+  })
+}
+
+// 🔹 MACD indicator loader
+const loadMACD = async (symbol: string, data: ChartPoint[]) => {
+  const res = await api.get(`/macd/${symbol}`)
+
+  const map = new Map<string, any>()
+  res.data.forEach((r: any) => {
+    if (r.date) {
+      map.set(r.date, r)
+    }
+  })
+
+  return data.map(p => {
+    const d = new Date(p.timestamp!).toISOString().slice(0, 10)
+    const m = map.get(d)
+
+    return m
+      ? {
+          ...p,
+          macd: m.MACD,
+          macdSignal: m.Signal,
+          macdHist: m.Histogram
+        }
+      : p
+  })
 }
 
 
@@ -948,23 +995,30 @@ useEffect(() => {
 //  FINAL: Indicator Loader (ON / OFF properly works)
 useEffect(() => {
   const loadIndicators = async () => {
+    console.log('[INDICATOR DEBUG] timeframe:', timeframe, 'chartData.length:', chartData.length, 'activeIndicators:', activeIndicators)
     if (chartData.length === 0) return
     if (activeIndicators.length === 0) {
-
       setChartData(prev =>
         prev.map(p => ({
           ...p,
           sma: undefined,
           ema: undefined,
-          bollinger: undefined
+          bollinger: undefined,
+          rsi: undefined,
+          macd: undefined,
+          macdSignal: undefined,
+          macdHist: undefined,
         }))
       )
       return
     }
 
-    if (timeframe === '1D' || chartData.length < 25) return
+    if (timeframe === '1D' || chartData.length < 25) {
+      console.log('[INDICATOR DEBUG] Skipping indicator load due to timeframe or insufficient candles')
+      return
+    }
 
-    // 🔥 OFF indicators ka data hatao
+    //  OFF indicators ka data hatao
     let updated = chartData.map(p => ({
       ...p,
       ...(activeIndicators.includes('SMA') ? {} : { sma: undefined }),
@@ -972,7 +1026,7 @@ useEffect(() => {
       ...(activeIndicators.includes('Bollinger') ? {} : { bollinger: undefined }),
     }))
 
-    // 🔥 ON indicators load karo
+    //  ON indicators load karo
     if (activeIndicators.includes('SMA')) {
       updated = await loadSMA(selectedSymbol, updated)
     }
@@ -981,18 +1035,35 @@ useEffect(() => {
       updated = await loadEMA(selectedSymbol, updated)
     }
 
-   if (activeIndicators.includes('Bollinger')) {
-     if (chartData.length >= 20) {
-    updated = await loadBollinger(selectedSymbol, updated)
-  }
-}
+    if (activeIndicators.includes('Bollinger')) {
+      if (chartData.length >= 20) {
+        updated = await loadBollinger(selectedSymbol, updated)
+      }
+    }
+    if (activeIndicators.includes('RSI')) {
+      updated = await loadRSI(selectedSymbol, updated)
+    }
 
-   const hasIndicatorData = updated.some(
-  p => p.sma !== undefined || p.ema !== undefined || p.bollinger !== undefined
-)
-
-if (!hasIndicatorData) return
-setChartData(updated)
+    if (activeIndicators.includes('MACD')) {
+      updated = await loadMACD(selectedSymbol, updated)
+    }
+    // Debug: print a sample of updated data
+    console.log('[INDICATOR DEBUG] updated sample:', updated.slice(0, 5))
+    const hasIndicatorData = updated.some(
+      p =>
+        p.sma !== undefined ||
+        p.ema !== undefined ||
+        p.bollinger !== undefined ||
+        p.rsi !== undefined ||
+        p.macd !== undefined ||
+        p.macdSignal !== undefined ||
+        p.macdHist !== undefined
+    )
+    if (!hasIndicatorData) {
+      console.log('[INDICATOR DEBUG] No indicator data found in updated chartData')
+      return
+    }
+    setChartData(updated)
 
 
   }
@@ -1196,7 +1267,7 @@ setChartData(updated)
                 
                 {/* Stock Info */}
                 <div>
-                  <div className="flex items-center gap-2 flex-wrap">
+                  <div className="flex items-center gap-2 flex-wrap mt-[60px]">
                     <h2 className="text-2xl font-bold text-white">{cleanCompanyName(stockData?.name) || selectedSymbol.replace('.NS', '')}</h2>
                     <button
                       onClick={() => openWatchlistModal(selectedSymbol)}
@@ -1317,10 +1388,12 @@ setChartData(updated)
               ) : chartType === 'candle' ? (
                 <div className="h-full w-full">
                  <EChartCandle 
-                 data={chartData}
-                  showVolume={showVolume && !selectedSymbol.startsWith('^')} 
-                 showIndicators={activeIndicators.length > 0}
-                />
+                   data={chartData}
+                   showVolume={showVolume && !selectedSymbol.startsWith('^')} 
+                   showIndicators={activeIndicators.length > 0}
+                   showRSI={activeIndicators.includes('RSI')}
+                   showMACD={activeIndicators.includes('MACD')}
+                 />
                 </div>
               ) : (
                 /* Line Chart with Indicators Support */
