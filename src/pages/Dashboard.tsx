@@ -139,7 +139,7 @@ export default function Dashboard() {
   const [allStockSymbols, setAllStockSymbols] = useState<string[]>([])
   const [indicesSymbols, setIndicesSymbols] = useState<string[]>([])
   const [indicesListNames, setIndicesListNames] = useState<string[]>([])
-  const [selectedIndexForMovers, setSelectedIndexForMovers] = useState<string>('NIFTY50')
+  const [selectedIndexForMovers, setSelectedIndexForMovers] = useState<string | null>(null)
   const [loadingMovers, setLoadingMovers] = useState(false)
 
   // Watchlist modal state (for Popular Stocks add-to-watchlist)
@@ -223,11 +223,14 @@ const loadMACD = async (symbol: string, data: ChartPoint[]) => {
         const res = await api.get('/indices/list')
         const data = Array.isArray(res.data) ? res.data : []
         if (mounted) setIndicesListNames(data)
-        // Ensure selectedIndexForMovers matches an available backend name
+        // Ensure selectedIndexForMovers is set once (avoid transient default value flicker)
         if (mounted && Array.isArray(data) && data.length > 0) {
-          if (!data.includes(selectedIndexForMovers)) {
-            setSelectedIndexForMovers(data[0])
-          }
+          setSelectedIndexForMovers((prev) => {
+            // if already set and still valid, keep it
+            if (prev && data.includes(prev)) return prev
+            // otherwise pick first available index from backend
+            return data[0]
+          })
         }
         if (mounted && data.length > 0) {
           // Map friendly index names to ticker symbols expected by fetchStock
@@ -712,8 +715,39 @@ const loadBollinger = async (symbol: string, data: ChartPoint[]) => {
 
       console.debug('Server movers lists', { gList, lList })
       const [enrichedGainers, enrichedLosers] = await Promise.all([enrich(gList), enrich(lList)])
-      setGainers(enrichedGainers.slice(0, topN))
-      setLosers(enrichedLosers.slice(0, topN))
+
+      // If backend returned fewer than requested, try to fill from index members
+      const ensureCount = async (items: StockData[], existingSymbols: Set<string>, needed: number, keyForIndex: string) => {
+        if (items.length >= needed) return items.slice(0, needed)
+        try {
+          const res = await api.get(`/indices/${encodeURIComponent(keyForIndex)}`)
+          const members = Array.isArray(res.data) ? res.data.map((it: any) => it.stock_symbol || it.stockSymbol || it.symbol).filter(Boolean) : []
+          for (const sym of members) {
+            if (items.length >= needed) break
+            if (existingSymbols.has(sym)) continue
+            try {
+              const f = await fetchStock(sym)
+              if (f) {
+                items.push({ ...f, changePercent: Number(f.changePercent ?? 0) })
+                existingSymbols.add(sym)
+              }
+            } catch (e) {
+              // ignore individual fetch failures
+            }
+          }
+        } catch (e) {
+          console.warn('Failed to fetch index members for filler', keyForIndex, e)
+        }
+        return items.slice(0, needed)
+      }
+
+      const gSymbols = new Set(enrichedGainers.map(s => s.symbol))
+      const lSymbols = new Set(enrichedLosers.map(s => s.symbol))
+      const finalGainers = await ensureCount(enrichedGainers.slice(), gSymbols, topN, candidates[0] || indexName)
+      const finalLosers = await ensureCount(enrichedLosers.slice(), lSymbols, topN, candidates[0] || indexName)
+
+      setGainers(finalGainers)
+      setLosers(finalLosers)
     } catch (err) {
       console.error('Failed to load top movers for index', indexName, err)
       showToast('Failed to load movers', 'error')
@@ -1095,13 +1129,7 @@ useEffect(() => {
         const popularStocks = pResults.filter(Boolean) as StockData[]
         setPopularData(popularStocks)
         
-        // Load real top movers from backend for the selected index (fallback to NIFTY50)
-        try {
-          await loadTopMovers(selectedIndexForMovers || 'NIFTY50', 3)
-        } catch (e) {
-          // If server-side movers fail, leave popular list as-is
-          console.warn('Failed to load server-side top movers on mount', e)
-        }
+        // Top movers will be loaded by the dedicated effect when `selectedIndexForMovers` is ready.
       } catch (err) {
         console.error('Failed to load popular stocks:', err)
       }
@@ -1216,7 +1244,7 @@ useEffect(() => {
           {isFullscreen && (
             <div className="fixed inset-0 bg-black/90 z-[9998]" onClick={() => setIsFullscreen(false)} />
           )}
-          <div className={`bg-[#131722] ${isFullscreen ? 'rounded-none' : 'rounded-xl'} border border-[#2a2e39] p-4 shadow-lg flex flex-col transition-all ${isFullscreen ? 'fixed inset-0 z-[9999] m-0 p-6 overflow-auto' : 'h-[75%]'}`}>
+          <div className={`bg-[#131722] ${isFullscreen ? 'rounded-none' : 'rounded-xl'} border border-[#2a2e39] p-4 shadow-lg flex flex-col transition-all ${isFullscreen ? 'fixed inset-0 z-[9999] m-0 p-6 overflow-auto' : 'h-auto'}`}>
             {/* Header with Search & Fullscreen */}
             <div className="flex justify-between items-start mb-3">
               <div className="flex-1">
@@ -1375,80 +1403,75 @@ useEffect(() => {
               </button>
             </div>
 
-            <div className="flex-1 w-full min-h-0">
-              {loading && chartData.length === 0 ? (
-                /* Professional Loading Skeleton */
-                <div className="h-full w-full bg-gradient-to-br from-[#1e222d] via-[#131722] to-[#1e222d] rounded-lg animate-pulse flex items-center justify-center">
-                  <div className="text-center">
-                    <Activity className="animate-spin text-[#2962ff] mx-auto mb-2" size={32} />
-                    <p className="text-[#787b86] text-sm font-medium">Loading chart data...</p>
-                    <p className="text-[#787b86] text-xs mt-1">{timeframe.toUpperCase()} • {selectedSymbol.replace('.NS', '')}</p>
+<div className="w-full min-h-0 flex-1 flex flex-col">
+  {loading && chartData.length === 0 ? (
+    /* 1. Loading Skeleton */
+    <div className={`w-full bg-gradient-to-br from-[#1e222d] via-[#131722] to-[#1e222d] rounded-lg animate-pulse flex items-center justify-center transition-all duration-300 ${isFullscreen ? 'h-[calc(100vh-185px)]' : 'h-[28rem]'}`}>
+      <div className="text-center">
+        <Activity className="animate-spin text-[#2962ff] mx-auto mb-2" size={32} />
+        <p className="text-[#787b86] text-sm font-medium">Loading chart data...</p>
+        <p className="text-[#787b86] text-xs mt-1">{timeframe.toUpperCase()} • {selectedSymbol.replace('.NS', '')}</p>
+      </div>
+    </div>
+  ) : chartType === 'candle' ? (
+    /* 2. Candle Chart (Height Adjusted to 185px to Fix Scroll) */
+    <div className={`w-full overflow-hidden transition-all duration-300 ${isFullscreen ? 'h-[calc(100vh-185px)]' : 'h-[28rem]'}`}>
+      <EChartCandle 
+        data={chartData}
+        showVolume={showVolume && !selectedSymbol.startsWith('^')} 
+        showIndicators={activeIndicators.length > 0}
+        showRSI={activeIndicators.includes('RSI')}
+        showMACD={activeIndicators.includes('MACD')}
+      />
+    </div>
+  ) : (
+    /* 3. Line Chart (Height Adjusted to 185px to Fix Scroll) */
+    <div className={`w-full overflow-hidden transition-all duration-300 ${isFullscreen ? 'h-[calc(100vh-185px)]' : 'h-[28rem]'}`}>
+      <ResponsiveContainer width="100%" height="100%">
+        <AreaChart data={chartData}>
+          <defs>
+            <linearGradient id="colorPrice" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="5%" stopColor="#2962ff" stopOpacity={0.3}/>
+              <stop offset="95%" stopColor="#2962ff" stopOpacity={0}/>
+            </linearGradient>
+          </defs>
+          <CartesianGrid strokeDasharray="3 3" stroke="#2a2e39" vertical={false} />
+          <XAxis dataKey="time" stroke="#50535e" fontSize={10} tickLine={false} axisLine={false} minTickGap={40} />
+          <YAxis 
+            orientation="right" 
+            domain={['auto', 'auto']} 
+            stroke="#50535e" 
+            fontSize={10} 
+            tickLine={false} 
+            axisLine={false}
+            tickFormatter={(value) => `₹${value.toFixed(0)}`}
+          />
+          <Tooltip 
+            contentStyle={{ backgroundColor: '#1e222d', borderColor: '#2a2e39', color: '#fff' }}
+            content={({ payload }) => {
+              if (payload && payload.length > 0) {
+                const data = payload[0].payload
+                return (
+                  <div className="bg-[#1e222d] border border-[#2a2e39] p-2 rounded text-xs">
+                    <p className="text-[#787b86]">{data.time}</p>
+                    <p className="text-white">Price: <span className="font-mono text-[#2962ff]">₹{data.price?.toFixed(2)}</span></p>
+                    {activeIndicators.includes('SMA') && data.sma && <p className="text-[#ff9800]">SMA: ₹{data.sma.toFixed(2)}</p>}
+                    {activeIndicators.includes('EMA') && data.ema && <p className="text-[#2196f3]">EMA: ₹{data.ema.toFixed(2)}</p>}
                   </div>
-                </div>
-              ) : chartType === 'candle' ? (
-                <div className="h-full w-full">
-                 <EChartCandle 
-                   data={chartData}
-                   showVolume={showVolume && !selectedSymbol.startsWith('^')} 
-                   showIndicators={activeIndicators.length > 0}
-                   showRSI={activeIndicators.includes('RSI')}
-                   showMACD={activeIndicators.includes('MACD')}
-                 />
-                </div>
-              ) : (
-                /* Line Chart with Indicators Support */
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={chartData}>
-                    <defs>
-                      <linearGradient id="colorPrice" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#2962ff" stopOpacity={0.3}/>
-                        <stop offset="95%" stopColor="#2962ff" stopOpacity={0}/>
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#2a2e39" vertical={false} />
-                    <XAxis dataKey="time" stroke="#50535e" fontSize={10} tickLine={false} axisLine={false} minTickGap={40} />
-                    <YAxis 
-                      orientation="right" 
-                      domain={['auto', 'auto']} 
-                      stroke="#50535e" 
-                      fontSize={10} 
-                      tickLine={false} 
-                      axisLine={false}
-                      tickFormatter={(value) => `₹${value.toFixed(0)}`}
-                    />
-                    <Tooltip 
-                      contentStyle={{ backgroundColor: '#1e222d', borderColor: '#2a2e39', color: '#fff' }}
-                      content={({ payload }) => {
-                        if (payload && payload.length > 0) {
-                          const data = payload[0].payload as ChartPoint
-                          return (
-                            <div className="bg-[#1e222d] border border-[#2a2e39] p-2 rounded text-xs">
-                              <p className="text-[#787b86]">{data.time}</p>
-                              <p className="text-white">Price: <span className="font-mono text-[#2962ff]">₹{data.price?.toFixed(2)}</span></p>
-                              {activeIndicators.length > 0 && ( // Check length instead
-                                <>
-                                  {activeIndicators.includes('SMA') && data.sma && <p className="text-[#ff9800] mt-1">SMA(20): ₹{data.sma.toFixed(2)}</p>}
-                                  {activeIndicators.includes('EMA') && data.ema && <p className="text-[#2196f3]">EMA(12): ₹{data.ema.toFixed(2)}</p>}
-                                </>
-                              )}
-                            </div>
-                          )
-                        }
-                        return null
-                      }}
-                    />
-                    <Area type="monotone" dataKey="price" stroke="#2962ff" strokeWidth={2} fillOpacity={1} fill="url(#colorPrice)" />
-                    {/* Technical Indicators for Line Chart */}
-                    {activeIndicators.length > 0 && (  //  Correct
-                  <>
-                    {activeIndicators.includes('SMA') && <Line type="monotone" dataKey="sma" stroke="#ff9800" strokeWidth={2} dot={false} name="SMA(20)" strokeDasharray="5 5" />}
-                    {activeIndicators.includes('EMA') && <Line type="monotone" dataKey="ema" stroke="#2196f3" strokeWidth={2} dot={false} name="EMA(12)" strokeDasharray="3 3" />}
-                  </>
-                )}
-                  </AreaChart>
-                </ResponsiveContainer>
-              )}
-            </div>
+                )
+              }
+              return null
+            }}
+          />
+          <Area type="monotone" dataKey="price" stroke="#2962ff" strokeWidth={2} fillOpacity={1} fill="url(#colorPrice)" />
+          
+          {activeIndicators.includes('SMA') && <Line type="monotone" dataKey="sma" stroke="#ff9800" strokeWidth={2} dot={false} strokeDasharray="5 5" />}
+          {activeIndicators.includes('EMA') && <Line type="monotone" dataKey="ema" stroke="#2196f3" strokeWidth={2} dot={false} strokeDasharray="3 3" />}
+        </AreaChart>
+      </ResponsiveContainer>
+    </div>
+  )}
+</div>
 
             {error && (
               <div className="mt-3 text-xs text-[#f23645] bg-[#f23645]/10 border border-[#f23645]/30 rounded px-3 py-2 flex items-center justify-between">
@@ -1460,13 +1483,13 @@ useEffect(() => {
 
           {/* Movers Section - REAL DATA */}
           <div className="flex items-center justify-between gap-3 mb-2">
-            <div className="flex items-center gap-2">
-              <label className="text-xs text-[#787b86]">Index:</label>
-              <select
-                value={selectedIndexForMovers}
-                onChange={(e) => setSelectedIndexForMovers(e.target.value)}
-                className="bg-[#1e222d] border border-[#2a2e39] px-2 py-1 rounded text-sm text-white"
-              >
+            <div className="flex items-center gap-1">
+                <label className="text-xs text-[#787b86]">Index:</label>
+                <select
+                  value={selectedIndexForMovers}
+                  onChange={(e) => setSelectedIndexForMovers(e.target.value)}
+                  className="bg-[#1e222d] border border-[#2a2e39] px-1 py-1 rounded text-sm text-white ml-0"
+                >
                 {(indicesListNames.length ? indicesListNames : ['NIFTY50','BANKNIFTY','SENSEX']).map((nm) => (
                   <option key={nm} value={nm}>{nm}</option>
                 ))}
@@ -1475,7 +1498,7 @@ useEffect(() => {
             </div>
             <div className="text-xs text-[#787b86]">{isMarketOpen() ? 'Top 5 movers' : 'Market Closed — showing last close movers'}</div>
           </div>
-          <div className="grid grid-cols-2 gap-4 h-[25%]">
+          <div className="grid grid-cols-2 gap-4">
             {/* Gainers */}
             <div className="bg-[#131722] rounded-xl border border-[#2a2e39] overflow-hidden flex flex-col">
               <div className="p-3 border-b border-[#2a2e39] bg-[#1e222d] flex items-center gap-2">
