@@ -7,7 +7,7 @@ import Register from '@/pages/Register'
 import Dashboard from '@/pages/Dashboard'
 
 function RequireAuth({ children }: { children: JSX.Element }) {
-  const token = typeof window !== 'undefined' ? (localStorage.getItem('token') || localStorage.getItem('access_token')) : null
+  const token = typeof window !== 'undefined' ? localStorage.getItem('access_token') : null
   if (!token) {
     return <Navigate to="/login" replace />
   }
