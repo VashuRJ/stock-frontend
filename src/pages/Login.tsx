@@ -1,10 +1,12 @@
 import { useState } from 'react'
 import { api } from '@/api/client'
 import { useNavigate } from 'react-router-dom'
+import { FiEye, FiEyeOff} from "react-icons/fi";
 
 export default function Login() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const navigate = useNavigate()
@@ -60,7 +62,7 @@ export default function Login() {
                   className="w-22 h-20 object-contain" 
                 />
             </div>
-            <p className="text-[#787b86] mt-2 text-sm">Institutional Trading Platform</p>
+            <p className="text-[#a5a9b9] mt-2 text-sm">Institutional Trading Platform</p>
           </div>
 
           <div className="bg-[#131722] p-8 rounded-2xl border border-[#2a2e39] shadow-2xl">
@@ -69,13 +71,13 @@ export default function Login() {
             <form onSubmit={submit} className="space-y-5">
               
               <div className="space-y-1.5">
-                <label className="text-xs font-medium text-[#ffffff] uppercase tracking-wide ml-1">Email Address</label>
+                <label className="text-xs font-medium text-[#b1b1b1] uppercase tracking-wide ml-1">Email Address</label>
                 <div className="relative">
                   <input
                     type="email"
                     value={email}
                     onChange={e => setEmail(e.target.value)}
-                    className="w-full bg-white border border-[#2a2e39] text-black text-sm rounded-lg focus:ring-1 focus:ring-[#2962ff] focus:border-[#2962ff] p-3 transition-all placeholder-[#262627] focus:outline-none"
+                    className="w-full bg-[#0e1117] border border-[#2a2e39] text-white text-sm rounded-lg focus:ring-1 focus:ring-[#2962ff] focus:border-[#2962ff] p-3 transition-all placeholder-[#575b64] focus:outline-none"
                     placeholder="Enter your email"
                     required
                   />
@@ -83,16 +85,24 @@ export default function Login() {
               </div>
 
               <div className="space-y-1.5">
-                <label className="text-xs font-medium text-[#fefeff] uppercase tracking-wide ml-1">Password</label>
+                <label className="text-xs font-medium text-[#b1b1b1] uppercase tracking-wide ml-1">Password</label>
                 <div className="relative">
                   <input
-                    type="password"
+                    type={showPassword ? "text" : "password"}
                     value={password}
                     onChange={e => setPassword(e.target.value)}
-                    className="w-full bg-white border border-[#2a2e39] text-black text-sm rounded-lg focus:ring-1 focus:ring-[#2962ff] focus:border-[#2962ff] p-3 transition-all placeholder-[#9aa0a6] focus:outline-none"
+                    className="w-full bg-[#0e1117] border border-[#2a2e39] text-white text-sm rounded-lg focus:ring-1 focus:ring-[#2962ff] focus:border-[#2962ff] p-3 transition-all placeholder-[#575b64] focus:outline-none"
                     placeholder="••••••••"
                     required
                   />
+                  {showPassword ?
+                    <FiEye className="absolute right-3 top-3 text-gray-100 cursor-pointer h-5 w-5" 
+                    onClick={()=>setShowPassword(false)}
+                    /> 
+                    :  <FiEyeOff className="absolute right-3 top-3 text-gray-100 cursor-pointer h-5 w-5" 
+                      onClick={()=>setShowPassword(true)}
+                    />
+                  }
                 </div>
               </div>
 
@@ -113,11 +123,11 @@ export default function Login() {
 
             {/* --- SIGNUP LINK --- */}
             <div className="mt-6 text-center pt-4 border-t border-[#2a2e39]">
-              <p className="text-sm text-[#787b86]">
+              <p className="text-sm text-[#b1b1b1]">
                 Don't have an account?{' '}
                 <button 
                   onClick={() => navigate('/register')} 
-                  className="text-[#2962ff] hover:text-[#1e53e5] font-medium hover:underline transition-colors"
+                  className="text-[#416de6] hover:text-[#2557e0] font-medium hover:underline transition-colors"
                 >
                   Create one for free
                 </button>

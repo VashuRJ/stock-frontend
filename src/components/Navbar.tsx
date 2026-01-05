@@ -16,7 +16,9 @@ export default function Navbar() {
 
   const handleLogout = () => {
     localStorage.removeItem('access_token')
+    localStorage.removeItem('user_id')
     localStorage.removeItem('user_name')
+    localStorage.removeItem('user_email')
     setIsLoggedIn(false)
     // Force full reload to home to avoid any stale auth state
     window.location.href = '/'
