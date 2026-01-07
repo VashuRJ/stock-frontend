@@ -3,6 +3,7 @@ import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Line,
 } from 'recharts'
 import EChartCandle from '@/components/EChartCandle'
+
 import { 
   Search, Bell, User, Plus, Activity, TrendingUp, TrendingDown, LogOut, X, Check,
   ChevronRight, ChevronDown, Pencil, Trash2, CheckCircle2
@@ -1295,7 +1296,7 @@ useEffect(() => {
                 
                 {/* Stock Info */}
                 <div>
-                  <div className="flex items-center gap-2 flex-wrap mt-[60px]">
+                  <div className="flex items-center gap-2 flex-wrap mt-2">
                     <h2 className="text-2xl font-bold text-white">{cleanCompanyName(stockData?.name) || selectedSymbol.replace('.NS', '')}</h2>
                     <button
                       onClick={() => openWatchlistModal(selectedSymbol)}
@@ -1414,7 +1415,7 @@ useEffect(() => {
       </div>
     </div>
   ) : chartType === 'candle' ? (
-    /* 2. Candle Chart (Height Adjusted to 185px to Fix Scroll) */
+    /* 2. Professional Candlestick Chart (ECharts - Optimized) */
     <div className={`w-full overflow-hidden transition-all duration-300 ${isFullscreen ? 'h-[calc(100vh-185px)]' : 'h-[28rem]'}`}>
       <EChartCandle 
         data={chartData}

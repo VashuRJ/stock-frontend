@@ -43,6 +43,8 @@ export default function EChartCandle({
   const chartRef = useRef<any>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
   const xAxisOverlayRef = useRef<HTMLDivElement>(null);
+  const [visibleRange, setVisibleRange] = React.useState<{start: number, end: number}>({start: 0, end: 100});
+  const [showSettings, setShowSettings] = React.useState(false);
 
   const option = useMemo(() => {
     if (!data || data.length === 0) {
@@ -110,12 +112,12 @@ export default function EChartCandle({
     const bLower = validData.map(v => data[v.index!].bollinger?.lower ?? null);
     const rsiData = validData.map(v => data[v.index!].rsi ?? null);
 
-    // 📊 Calculate dynamic Y-axis range for better candle visibility
-    const allPrices = candleValues.flatMap(candle => [candle[2], candle[3]]); // low and high
+    // 📊 Calculate Y-axis range (STABLE - doesn't change on pan)
+    const allPrices = candleValues.flatMap(candle => [candle[2], candle[3]]);
     const minPrice = Math.min(...allPrices);
     const maxPrice = Math.max(...allPrices);
     const priceRange = maxPrice - minPrice;
-    const padding = priceRange * 0.05; // 5% padding instead of 20%
+    const padding = priceRange * 0.1; // 10% padding for stability
 
     return {
       backgroundColor: '#131722',
@@ -155,22 +157,28 @@ export default function EChartCandle({
         label: { backgroundColor: '#777' }
       },
 
-      // 2. Grid Layout
+      // 2. Grid Layout (Fixed to prevent candle cutoff)
       grid: [
         { 
-            left: 60, right: 70, // Right space for Y-Axis interaction
-            top: '5%', 
-            height: showVolume ? '60%' : '75%' 
+            left: 10, 
+            right: 1,
+            top: '8%',
+            bottom: showVolume ? '28%' : '12%', // Space for volume + X-axis labels
+            containLabel: true
         },
         { 
-            left: 60, right: 70, 
-            top: showVolume ? '68%' : '90%', 
-            height: showVolume ? '15%' : '0%' 
+            left: 10, 
+            right: 30, 
+            top: showVolume ? '68%' : 'auto', // Auto height when no volume
+            height: showVolume ? '15%' : '0%',
+            containLabel: false
         },
         { 
-            left: 60, right: 70, 
-            top: showVolume ? '85%' : '75%', 
-            height: '10%' 
+            left: 10, 
+            right: 30, 
+            top: showVolume ? '84%' : (100 - 12) + '%', // Position at bottom edge - bottom margin
+            height: '30%',
+            containLabel: false
         }
       ],
 
@@ -194,17 +202,18 @@ export default function EChartCandle({
         }
       ],
 
-      // 4. Y-Axis
+      // 4. Y-Axis (Stable configuration - no jumping)
       yAxis: [
         { 
             scale: true, 
             gridIndex: 0, 
             position: 'right',
-            min: (value: any) => value.min - padding, // Dynamic min with controlled padding
-            max: (value: any) => value.max + padding, // Dynamic max with controlled padding
+            min: minPrice - padding, // Stable fixed range
+            max: maxPrice + padding,
             splitLine: { show: true, lineStyle: { color: '#2a2e39', type: 'dashed', opacity: 0.3 } },
             axisLabel: { 
               color: '#8b95a1', 
+              margin: 4, // Tight padding between chart and Y labels
               formatter: (val: number) => {
                 // Smart price formatting
                 if (val >= 1000) return val.toFixed(0);
@@ -221,31 +230,38 @@ export default function EChartCandle({
         { type: 'value', gridIndex: 2, show: false }
       ],
 
-      // 5. ZOOM CONFIGURATION
+      // 5. ZOOM & PAN CONFIGURATION (Professional Trading Style)
       dataZoom: [
         {
-          // Index 0: Horizontal (Time)
+          // Index 0: Horizontal (Time) - Zoom + Pan  
           type: 'inside',
           xAxisIndex: [0, 1, 2],
           zoomOnMouseWheel: true,
           moveOnMouseMove: true,
-          throttle: 50, // Throttle for performance (was 0)
+          moveOnMouseWheel: false,
+          preventDefaultMouseMove: true,
+          throttle: 50,
           zoomLock: false,
-          minSpan: 5,
-          start: validData.length > 100 ? 80 : 0, // Show last 20% if too much data
-          end: 100
+          minSpan: 2, // Allow very close zoom (was 5)
+          maxSpan: 100,
+          // Remove auto-reset: let user control zoom position
+          filterMode: 'none' // Don't filter data, just zoom view
         },
         {
-          // Index 1: Vertical (Price) - Enhanced
+          // Index 1: Vertical (Price) - Pan Only (Zoom handled manually)
           type: 'inside',
           yAxisIndex: 0,
-          zoomOnMouseWheel: false,
-          moveOnMouseMove: false,
-          throttle: 50, // Throttle for performance
-          zoomLock: false,
+          zoomOnMouseWheel: false, // Disable wheel zoom (we handle it manually)
+          moveOnMouseMove: true, // ✅ Enable pan
+          moveOnMouseWheel: false,
+          preventDefaultMouseMove: true,
+          throttle: 50,
+          zoomLock: true, // 🔒 Lock zoom but allow pan
           minSpan: 2,
           maxSpan: 100,
-          orient: 'vertical'
+          orient: 'vertical',
+          rangeMode: ['value', 'value'],
+          filterMode: 'none' // 🚀 NEVER filter data
         }
       ],
 
@@ -254,16 +270,20 @@ export default function EChartCandle({
           name: 'Price',
           type: 'candlestick',
           data: candleValues,
+          clip: true, // 🚀 Clip candles at grid boundaries (prevents X-axis overlap)
           itemStyle: {
             color: '#089981',
             color0: '#f23645',
             borderColor: '#089981',
-            borderColor0: '#f23645'
+            borderColor0: '#f23645',
+            borderWidth: 1
           },
-          // 🎯 Adaptive bar width based on data count
-          barWidth: validData.length > 200 ? '80%' : validData.length > 100 ? '70%' : '60%',
-          barMaxWidth: 10, // Prevent too thick candles when zoomed in
-          barMinWidth: 1,  // Prevent invisible candles when zoomed out
+          // 🎯 Smart bar width - auto-calculated by ECharts based on zoom
+          barWidth: validData.length > 200 ? '60%' : validData.length > 100 ? '70%' : '80%',
+          barMaxWidth: 20, // Allow wider candles when zoomed in
+          barMinWidth: 0.5, // Thinner lines when zoomed out
+          large: true, // Enable large dataset optimization
+          largeThreshold: 500 // Optimize when > 500 candles
         },
         ...(showVolume ? [{
           name: 'Volume',
@@ -271,10 +291,12 @@ export default function EChartCandle({
           xAxisIndex: 1,
           yAxisIndex: 1,
           data: volumes,
-          // 🎯 Adaptive volume bar width (matches candles)
-          barWidth: validData.length > 200 ? '80%' : validData.length > 100 ? '70%' : '60%',
-          barMaxWidth: 10,
-          barMinWidth: 1
+          // 🎯 Smart volume bar width - auto-calculated by ECharts
+          barWidth: validData.length > 200 ? '60%' : validData.length > 100 ? '70%' : '80%',
+          barMaxWidth: 20,
+          barMinWidth: 0.5,
+          large: true,
+          largeThreshold: 500
         }] : []),
         
         // Indicators...
@@ -315,20 +337,35 @@ export default function EChartCandle({
     }
   }, [data, showVolume, showIndicators, showRSI, showMACD])
 
-  // --- 🔥 PROFESSIONAL VERTICAL ZOOM (TradingView Style) ---
+  // --- 🔥 PROFESSIONAL ZOOM + PAN (TradingView Style) ---
   const onChartReady = (chart: any) => {
-    console.log('✅ Chart Ready - Vertical Zoom Initialized');
     chartRef.current = chart;
     const zr = chart.getZr();
     const chartDom = zr.dom;
     
     let isDraggingY = false;
+    let isPanning = false;
     let startY = 0;
     let startZoomRange = { start: 0, end: 100 };
+
+    // 📊 Listen to dataZoom changes to update visible range
+    chart.on('dataZoom', (params: any) => {
+      const xModel = chart.getModel().getComponent('dataZoom', 0);
+      if (xModel) {
+        const newStart = xModel.option.start || 0;
+        const newEnd = xModel.option.end || 100;
+        setVisibleRange({ start: newStart, end: newEnd });
+      }
+    });
 
     // Helper: Check if mouse is in Y-axis area
     const isInYAxisArea = (offsetX: number, width: number) => {
       return offsetX > width - 70; // Right 70px is Y-axis zone
+    };
+    
+    // Helper: Check if mouse is in chart center (pan area)
+    const isInChartCenter = (offsetX: number, width: number, offsetY: number, height: number) => {
+      return offsetX < width - 70 && offsetX > 60 && offsetY < height - 35 && offsetY > 0;
     };
 
     // Helper: Get current zoom range
@@ -337,30 +374,33 @@ export default function EChartCandle({
       return model ? { start: model.option.start || 0, end: model.option.end || 100 } : { start: 0, end: 100 };
     };
 
-    // Helper: Apply vertical zoom
-    const applyVerticalZoom = (newStart: number, newEnd: number, animate = false) => {
+    // Helper: Apply vertical zoom with smooth animation
+    const applyVerticalZoom = (newStart: number, newEnd: number, animate = true) => {
       chart.dispatchAction({
         type: 'dataZoom',
         dataZoomIndex: 1,
         start: Math.max(0, newStart),
         end: Math.min(100, newEnd),
-        animation: animate ? { duration: 150, easing: 'cubicOut' } : undefined
+        animation: animate ? { duration: 200, easing: 'quadInOut' } : undefined
       });
     };
 
-    // 1. 🎨 CURSOR & DRAG COMBINED: Unified mousemove handler
+    // 1. 🎨 CURSOR FEEDBACK: Dynamic cursor based on area
     zr.on('mousemove', (params: any) => {
       const width = chart.getWidth();
+      const height = chart.getHeight();
       const onYAxis = isInYAxisArea(params.offsetX, width);
+      const inCenter = isInChartCenter(params.offsetX, width, params.offsetY, height);
       
       // Handle dragging
       if (isDraggingY) {
         const delta = startY - params.offsetY;
-        const speed = 0.4;
+        const speed = 0.15; // Reduced from 0.4 for slower, smoother drag
         const range = startZoomRange.end - startZoomRange.start;
         const change = (delta / chart.getHeight()) * 100 * speed;
         
-        let newRange = range - change;
+        // UP drag (delta > 0) = ZOOM OUT (increase range), DOWN drag = ZOOM IN (decrease range)
+        let newRange = range + change;
         
         // Limits
         if (newRange < 2) newRange = 2;
@@ -376,13 +416,19 @@ export default function EChartCandle({
         if (newEnd > 100) { newEnd = 100; newStart = 100 - newRange; }
         
         applyVerticalZoom(newStart, newEnd);
-      } else {
+      } 
+      else if (isPanning) {
+        // Panning active - show grabbing cursor
+        chartDom.style.cursor = 'grabbing';
+      }
+      else {
         // Handle cursor change when not dragging
         if (onYAxis) {
           chartDom.style.cursor = 'ns-resize'; // ↕ cursor
-          console.log('🎯 Y-Axis Hover Detected');
+        } else if (inCenter) {
+          chartDom.style.cursor = 'grab'; // ✋ cursor for pan
         } else {
-          chartDom.style.cursor = 'crosshair'; // Trading chart standard cursor
+          chartDom.style.cursor = 'default';
         }
       }
     });
@@ -405,10 +451,11 @@ export default function EChartCandle({
         const zoomRange = getCurrentZoomRange();
         const range = zoomRange.end - zoomRange.start;
         
-        // Scroll direction: -1 = up (zoom in), 1 = down (zoom out)
+        // Scroll direction: deltaY > 0 = scroll down (zoom OUT), deltaY < 0 = scroll up (zoom IN)
         const direction = e.deltaY > 0 ? 1 : -1;
-        const zoomFactor = 0.1; // 10% change per scroll
+        const zoomFactor = 0.05; // 5% change per scroll (reduced from 10% for smoothness)
         
+        // Zoom OUT increases range, Zoom IN decreases range
         let newRange = range + (range * zoomFactor * direction);
         
         // Limits
@@ -440,28 +487,44 @@ export default function EChartCandle({
     // 3. 🖐️ DRAG ON Y-AXIS: Mouse down to start dragging
     zr.on('mousedown', (params: any) => {
       const width = chart.getWidth();
+      const height = chart.getHeight();
       
       if (isInYAxisArea(params.offsetX, width)) {
         isDraggingY = true;
         startY = params.offsetY;
         startZoomRange = getCurrentZoomRange();
         chartDom.style.cursor = 'ns-resize';
+      } else if (isInChartCenter(params.offsetX, width, params.offsetY, height)) {
+        isPanning = true;
+        chartDom.style.cursor = 'grabbing';
       }
     });
 
     zr.on('mouseup', () => {
-      isDraggingY = false;
-      chartDom.style.cursor = 'crosshair';
+      if (isDraggingY) {
+        isDraggingY = false;
+        chartDom.style.cursor = 'ns-resize';
+      }
+      if (isPanning) {
+        isPanning = false;
+        chartDom.style.cursor = 'grab';
+      }
     });
     
     const globalMouseUp = () => {
       isDraggingY = false;
-      chartDom.style.cursor = 'crosshair';
+      isPanning = false;
+      chartDom.style.cursor = 'grab';
     };
     window.addEventListener('mouseup', globalMouseUp);
 
-    // 4. 🔄 DOUBLE CLICK: Reset zoom with animation
+    // 4. 🔄 DOUBLE CLICK: Reset zoom with animation (with debounce protection)
+    let lastClickTime = 0;
     zr.on('dblclick', (params: any) => {
+      const now = Date.now();
+      if (now - lastClickTime < 300) return; // Prevent rapid double-clicks
+      lastClickTime = now;
+      
       const width = chart.getWidth();
       
       if (isInYAxisArea(params.offsetX, width)) {
@@ -513,7 +576,7 @@ export default function EChartCandle({
       const zoomRange = getCurrentZoomRange();
       const range = zoomRange.end - zoomRange.start;
       const direction = e.deltaY > 0 ? 1 : -1;
-      const zoomFactor = 0.1;
+      const zoomFactor = 0.05; // Reduced from 0.1 for smoother wheel zoom
       
       let newRange = range + (range * zoomFactor * direction);
       if (newRange < 2) newRange = 2;
@@ -527,16 +590,18 @@ export default function EChartCandle({
       if (newEnd > 100) { newEnd = 100; newStart = 100 - newRange; }
       
       applyVerticalZoom(newStart, newEnd);
+      
+      applyVerticalZoom(newStart, newEnd);
     };
     
     // Drag events on overlay - TradingView style (single click + drag)
     const handleMouseDown = (e: MouseEvent) => {
       e.preventDefault();
+      e.stopPropagation(); // Prevent event bubbling
       isDragging = true;
       startY = e.clientY;
       startZoomRange = getCurrentZoomRange();
       overlay.style.cursor = 'ns-resize';
-      console.log('🖱️ Drag Started');
     };
     
     const handleMouseMove = (e: MouseEvent) => {
@@ -565,9 +630,9 @@ export default function EChartCandle({
     const handleMouseUp = (e: MouseEvent) => {
       if (isDragging) {
         e.preventDefault();
+        e.stopPropagation(); // Prevent click events after drag
         isDragging = false;
         overlay.style.cursor = 'ns-resize';
-        console.log('🖱️ Drag Ended');
       }
     };
     
@@ -575,7 +640,6 @@ export default function EChartCandle({
       e.preventDefault();
       e.stopPropagation();
       applyVerticalZoom(0, 100);
-      console.log('🔄 Reset Zoom');
     };
     
     // Attach listeners
@@ -649,7 +713,6 @@ export default function EChartCandle({
       startX = e.clientX;
       startZoomRange = getCurrentXZoomRange();
       xAxisOverlay.style.cursor = 'ew-resize';
-      console.log('↔️ Horizontal Drag Started');
     };
     
     const handleMouseMove = (e: MouseEvent) => {
@@ -680,7 +743,6 @@ export default function EChartCandle({
         e.preventDefault();
         isDragging = false;
         xAxisOverlay.style.cursor = 'ew-resize';
-        console.log('↔️ Horizontal Drag Ended');
       }
     };
     
@@ -688,7 +750,6 @@ export default function EChartCandle({
       e.preventDefault();
       e.stopPropagation();
       applyHorizontalZoom(0, 100);
-      console.log('🔄 Reset Horizontal Zoom');
     };
     
     // Attach listeners
@@ -713,7 +774,11 @@ export default function EChartCandle({
             ref={chartRef}
             key={showIndicators ? 'indicators-on' : 'indicators-off'}
             option={option} 
-            style={{ height: '100%', width: '100%' }} 
+            style={{ 
+              height: '100%', 
+              width: '100%',
+              cursor: 'grab' // ✋ Hand cursor for pan
+            }} 
             notMerge={true}
             lazyUpdate={false}
             onChartReady={onChartReady}
@@ -736,6 +801,66 @@ export default function EChartCandle({
           }}
           title="Drag or scroll to zoom vertically"
         />
+        
+        {/* ⚙️ SETTINGS BUTTON (TradingView Style - Bottom Position) */}
+        <button
+          onClick={() => setShowSettings(!showSettings)}
+          style={{
+            position: 'absolute',
+            bottom: '1px',
+            right: '1px',
+            width: '32px',
+            height: '32px',
+            borderRadius: '4px',
+            border: '1px solid #2a2e39',
+            backgroundColor: '#1e222d',
+            color: '#9aa0af',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: '16px',
+            transition: 'all 0.2s ease',
+            zIndex: 20,
+            hover: { borderColor: '#2962ff', color: '#2962ff' }
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.borderColor = '#2962ff';
+            e.currentTarget.style.color = '#2962ff';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.borderColor = '#2a2e39';
+            e.currentTarget.style.color = '#9aa0af';
+          }}
+          title="Chart Settings"
+        >
+          ⚙️
+        </button>
+        
+        {/* Settings Panel (placeholder for future features) */}
+        {showSettings && (
+          <div
+            style={{
+              position: 'absolute',
+              bottom: '40px',
+              right: '36px',
+              width: '200px',
+              backgroundColor: '#1e222d',
+              border: '1px solid #2962ff',
+              borderRadius: '4px',
+              padding: '8px 0',
+              zIndex: 30,
+              boxShadow: '0 4px 12px rgba(0, 0, 0, 0.5)'
+            }}
+          >
+            <div style={{ padding: '8px 12px', color: '#787b86', fontSize: '12px', fontWeight: 'bold', borderBottom: '1px solid #2a2e39' }}>
+              Chart Settings
+            </div>
+            <div style={{ padding: '8px 12px', color: '#9aa0af', fontSize: '13px' }}>
+              More features coming soon...
+            </div>
+          </div>
+        )}
         
         {/* ↔️ X-Axis Overlay (Horizontal Zoom) - Bottom side */}
         <div 
