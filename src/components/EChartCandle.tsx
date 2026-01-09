@@ -163,7 +163,7 @@ export default function EChartCandle({
             left: 10, 
             right: 1,
             top: '8%',
-            bottom: showVolume ? '28%' : '12%', // Space for volume + X-axis labels
+            bottom: showVolume ? '32%' : '15%', // Space for volume + X-axis labels (increased padding)
             containLabel: true
         },
         { 
@@ -176,9 +176,9 @@ export default function EChartCandle({
         { 
             left: 10, 
             right: 30, 
-            top: showVolume ? '84%' : (100 - 12) + '%', // Position at bottom edge - bottom margin
-            height: '30%',
-            containLabel: false
+            bottom: '5%', // Fixed bottom margin to prevent label cutoff
+            top: showVolume ? '84%' : (100 - 15) + '%',
+            containLabel: true // Enable containLabel to ensure labels are fully visible
         }
       ],
 
@@ -237,31 +237,29 @@ export default function EChartCandle({
           type: 'inside',
           xAxisIndex: [0, 1, 2],
           zoomOnMouseWheel: true,
-          moveOnMouseMove: true,
+          moveOnMouseMove: true, // Enable horizontal pan
           moveOnMouseWheel: false,
-          preventDefaultMouseMove: true,
-          throttle: 50,
+          preventDefaultMouseMove: false,
+          throttle: 30,
           zoomLock: false,
-          minSpan: 2, // Allow very close zoom (was 5)
+          minSpan: 2,
           maxSpan: 100,
-          // Remove auto-reset: let user control zoom position
-          filterMode: 'none' // Don't filter data, just zoom view
+          filterMode: 'none'
         },
         {
-          // Index 1: Vertical (Price) - Pan Only (Zoom handled manually)
+          // Index 1: Vertical (Price) - Pan enabled
           type: 'inside',
           yAxisIndex: 0,
-          zoomOnMouseWheel: false, // Disable wheel zoom (we handle it manually)
-          moveOnMouseMove: true, // ✅ Enable pan
+          zoomOnMouseWheel: false, // Y-zoom handled by overlay
+          moveOnMouseMove: true, // ✅ Enable vertical pan (drag up/down)
           moveOnMouseWheel: false,
-          preventDefaultMouseMove: true,
-          throttle: 50,
-          zoomLock: true, // 🔒 Lock zoom but allow pan
+          preventDefaultMouseMove: false,
+          throttle: 30,
+          zoomLock: false,
           minSpan: 2,
           maxSpan: 100,
           orient: 'vertical',
-          rangeMode: ['value', 'value'],
-          filterMode: 'none' // 🚀 NEVER filter data
+          filterMode: 'none'
         }
       ],
 
@@ -342,11 +340,6 @@ export default function EChartCandle({
     chartRef.current = chart;
     const zr = chart.getZr();
     const chartDom = zr.dom;
-    
-    let isDraggingY = false;
-    let isPanning = false;
-    let startY = 0;
-    let startZoomRange = { start: 0, end: 100 };
 
     // 📊 Listen to dataZoom changes to update visible range
     chart.on('dataZoom', (params: any) => {
@@ -363,25 +356,23 @@ export default function EChartCandle({
       return offsetX > width - 70; // Right 70px is Y-axis zone
     };
     
+    // Helper: Check if mouse is in X-axis area  
+    const isInXAxisArea = (offsetY: number, height: number) => {
+      return offsetY > height - 35; // Bottom 35px is X-axis zone
+    };
+    
     // Helper: Check if mouse is in chart center (pan area)
     const isInChartCenter = (offsetX: number, width: number, offsetY: number, height: number) => {
-      return offsetX < width - 70 && offsetX > 60 && offsetY < height - 35 && offsetY > 0;
+      return offsetX < width - 70 && offsetX > 10 && offsetY < height - 35 && offsetY > 0;
     };
 
-    // Helper: Get current zoom range
-    const getCurrentZoomRange = () => {
-      const model = chart.getModel().getComponent('dataZoom', 1);
-      return model ? { start: model.option.start || 0, end: model.option.end || 100 } : { start: 0, end: 100 };
-    };
-
-    // Helper: Apply vertical zoom with smooth animation
-    const applyVerticalZoom = (newStart: number, newEnd: number, animate = true) => {
+    // Helper: Apply vertical zoom
+    const applyVerticalZoom = (newStart: number, newEnd: number) => {
       chart.dispatchAction({
         type: 'dataZoom',
         dataZoomIndex: 1,
         start: Math.max(0, newStart),
-        end: Math.min(100, newEnd),
-        animation: animate ? { duration: 200, easing: 'quadInOut' } : undefined
+        end: Math.min(100, newEnd)
       });
     };
 
@@ -390,135 +381,22 @@ export default function EChartCandle({
       const width = chart.getWidth();
       const height = chart.getHeight();
       const onYAxis = isInYAxisArea(params.offsetX, width);
+      const onXAxis = isInXAxisArea(params.offsetY, height);
       const inCenter = isInChartCenter(params.offsetX, width, params.offsetY, height);
       
-      // Handle dragging
-      if (isDraggingY) {
-        const delta = startY - params.offsetY;
-        const speed = 0.15; // Reduced from 0.4 for slower, smoother drag
-        const range = startZoomRange.end - startZoomRange.start;
-        const change = (delta / chart.getHeight()) * 100 * speed;
-        
-        // UP drag (delta > 0) = ZOOM OUT (increase range), DOWN drag = ZOOM IN (decrease range)
-        let newRange = range + change;
-        
-        // Limits
-        if (newRange < 2) newRange = 2;
-        if (newRange > 100) newRange = 100;
-        
-        // Maintain center
-        const center = (startZoomRange.start + startZoomRange.end) / 2;
-        let newStart = center - newRange / 2;
-        let newEnd = center + newRange / 2;
-        
-        // Bounds check
-        if (newStart < 0) { newStart = 0; newEnd = newRange; }
-        if (newEnd > 100) { newEnd = 100; newStart = 100 - newRange; }
-        
-        applyVerticalZoom(newStart, newEnd);
-      } 
-      else if (isPanning) {
-        // Panning active - show grabbing cursor
-        chartDom.style.cursor = 'grabbing';
-      }
-      else {
-        // Handle cursor change when not dragging
-        if (onYAxis) {
-          chartDom.style.cursor = 'ns-resize'; // ↕ cursor
-        } else if (inCenter) {
-          chartDom.style.cursor = 'grab'; // ✋ cursor for pan
-        } else {
-          chartDom.style.cursor = 'default';
-        }
+      // Set cursor based on area
+      if (onYAxis) {
+        chartDom.style.cursor = 'ns-resize'; // ↕ cursor for Y-axis
+      } else if (onXAxis) {
+        chartDom.style.cursor = 'ew-resize'; // ↔ cursor for X-axis
+      } else if (inCenter) {
+        chartDom.style.cursor = 'grab'; // ✋ cursor for pan
+      } else {
+        chartDom.style.cursor = 'default';
       }
     });
 
-    // 2. 🖱️ MOUSE WHEEL ON Y-AXIS: Scroll to zoom vertically
-    const handleWheel = (e: WheelEvent) => {
-      const rect = chartDom.getBoundingClientRect();
-      const offsetX = e.clientX - rect.left;
-      const offsetY = e.clientY - rect.top;
-      const width = chart.getWidth();
-      
-      // Check if Ctrl is pressed (for Y-zoom anywhere) OR mouse is on Y-axis
-      const isCtrlPressed = e.ctrlKey || e.metaKey;
-      const onYAxis = isInYAxisArea(offsetX, width);
-      
-      if (isCtrlPressed || onYAxis) {
-        e.preventDefault();
-        e.stopPropagation();
-        
-        const zoomRange = getCurrentZoomRange();
-        const range = zoomRange.end - zoomRange.start;
-        
-        // Scroll direction: deltaY > 0 = scroll down (zoom OUT), deltaY < 0 = scroll up (zoom IN)
-        const direction = e.deltaY > 0 ? 1 : -1;
-        const zoomFactor = 0.05; // 5% change per scroll (reduced from 10% for smoothness)
-        
-        // Zoom OUT increases range, Zoom IN decreases range
-        let newRange = range + (range * zoomFactor * direction);
-        
-        // Limits
-        if (newRange < 2) newRange = 2;   // Max zoom in
-        if (newRange > 100) newRange = 100; // Max zoom out
-        
-        // Center around mouse position
-        const chartHeight = chart.getHeight();
-        const gridTop = chartHeight * 0.05;
-        const gridHeight = chartHeight * (showVolume ? 0.6 : 0.75);
-        const relativeY = (offsetY - gridTop) / gridHeight;
-        const clampedY = Math.max(0, Math.min(1, relativeY));
-        
-        // Calculate zoom center based on mouse position
-        const center = zoomRange.start + (range * clampedY);
-        let newStart = center - newRange / 2;
-        let newEnd = center + newRange / 2;
-        
-        // Bounds check
-        if (newStart < 0) { newStart = 0; newEnd = newRange; }
-        if (newEnd > 100) { newEnd = 100; newStart = 100 - newRange; }
-        
-        applyVerticalZoom(newStart, newEnd);
-      }
-    };
-    
-    chartDom.addEventListener('wheel', handleWheel, { passive: false });
-
-    // 3. 🖐️ DRAG ON Y-AXIS: Mouse down to start dragging
-    zr.on('mousedown', (params: any) => {
-      const width = chart.getWidth();
-      const height = chart.getHeight();
-      
-      if (isInYAxisArea(params.offsetX, width)) {
-        isDraggingY = true;
-        startY = params.offsetY;
-        startZoomRange = getCurrentZoomRange();
-        chartDom.style.cursor = 'ns-resize';
-      } else if (isInChartCenter(params.offsetX, width, params.offsetY, height)) {
-        isPanning = true;
-        chartDom.style.cursor = 'grabbing';
-      }
-    });
-
-    zr.on('mouseup', () => {
-      if (isDraggingY) {
-        isDraggingY = false;
-        chartDom.style.cursor = 'ns-resize';
-      }
-      if (isPanning) {
-        isPanning = false;
-        chartDom.style.cursor = 'grab';
-      }
-    });
-    
-    const globalMouseUp = () => {
-      isDraggingY = false;
-      isPanning = false;
-      chartDom.style.cursor = 'grab';
-    };
-    window.addEventListener('mouseup', globalMouseUp);
-
-    // 4. 🔄 DOUBLE CLICK: Reset zoom with animation (with debounce protection)
+    // 2. 🔄 DOUBLE CLICK: Reset zoom
     let lastClickTime = 0;
     zr.on('dblclick', (params: any) => {
       const now = Date.now();
@@ -526,22 +404,20 @@ export default function EChartCandle({
       lastClickTime = now;
       
       const width = chart.getWidth();
+      const height = chart.getHeight();
       
       if (isInYAxisArea(params.offsetX, width)) {
         // Reset Y-zoom only
-        applyVerticalZoom(0, 100, true);
+        applyVerticalZoom(0, 100);
+      } else if (isInXAxisArea(params.offsetY, height)) {
+        // Reset X-zoom only
+        chart.dispatchAction({ type: 'dataZoom', dataZoomIndex: 0, start: 0, end: 100 });
       } else {
         // Reset both X and Y zoom
-        chart.dispatchAction({ type: 'dataZoom', start: 0, end: 100 });
-        applyVerticalZoom(0, 100, true);
+        chart.dispatchAction({ type: 'dataZoom', dataZoomIndex: 0, start: 0, end: 100 });
+        applyVerticalZoom(0, 100);
       }
     });
-
-    // Cleanup
-    return () => {
-      chartDom.removeEventListener('wheel', handleWheel);
-      window.removeEventListener('mouseup', globalMouseUp);
-    };
   };
   
   // 🎯 OVERLAY EVENTS: Handle events on overlay div
@@ -568,18 +444,19 @@ export default function EChartCandle({
       });
     };
     
-    // Wheel event on overlay
+    // Wheel event on overlay (Y-axis zoom)
     const handleOverlayWheel = (e: WheelEvent) => {
       e.preventDefault();
       e.stopPropagation();
       
       const zoomRange = getCurrentZoomRange();
       const range = zoomRange.end - zoomRange.start;
+      // Scroll UP = zoom in (reduce range), Scroll DOWN = zoom out (increase range)
       const direction = e.deltaY > 0 ? 1 : -1;
-      const zoomFactor = 0.05; // Reduced from 0.1 for smoother wheel zoom
+      const zoomFactor = 0.08; // 8% per scroll step
       
       let newRange = range + (range * zoomFactor * direction);
-      if (newRange < 2) newRange = 2;
+      if (newRange < 5) newRange = 5; // Min 5% range
       if (newRange > 100) newRange = 100;
       
       const center = (zoomRange.start + zoomRange.end) / 2;
@@ -588,8 +465,6 @@ export default function EChartCandle({
       
       if (newStart < 0) { newStart = 0; newEnd = newRange; }
       if (newEnd > 100) { newEnd = 100; newStart = 100 - newRange; }
-      
-      applyVerticalZoom(newStart, newEnd);
       
       applyVerticalZoom(newStart, newEnd);
     };
@@ -609,12 +484,13 @@ export default function EChartCandle({
       
       e.preventDefault();
       const delta = startY - e.clientY;
-      const speed = 0.4;
+      const speed = 0.25; // Smooth drag speed
       const range = startZoomRange.end - startZoomRange.start;
       const change = (delta / overlay.clientHeight) * 100 * speed;
       
+      // Drag UP = zoom in (reduce range), Drag DOWN = zoom out (increase range)
       let newRange = range - change;
-      if (newRange < 2) newRange = 2;
+      if (newRange < 5) newRange = 5; // Min 5% range
       if (newRange > 100) newRange = 100;
       
       const center = (startZoomRange.start + startZoomRange.end) / 2;
@@ -682,20 +558,22 @@ export default function EChartCandle({
       });
     };
     
-    // Wheel event on X-axis overlay
+    // Wheel event on X-axis overlay (time zoom)
     const handleXAxisWheel = (e: WheelEvent) => {
       e.preventDefault();
       e.stopPropagation();
       
       const zoomRange = getCurrentXZoomRange();
       const range = zoomRange.end - zoomRange.start;
+      // Scroll UP = zoom in, Scroll DOWN = zoom out
       const direction = e.deltaY > 0 ? 1 : -1;
-      const zoomFactor = 0.1;
+      const zoomFactor = 0.08; // 8% per scroll step (consistent with Y-axis)
       
       let newRange = range + (range * zoomFactor * direction);
-      if (newRange < 5) newRange = 5;
+      if (newRange < 3) newRange = 3; // Min 3% for X (can zoom in more)
       if (newRange > 100) newRange = 100;
       
+      // Zoom centered on current view
       const center = (zoomRange.start + zoomRange.end) / 2;
       let newStart = center - newRange / 2;
       let newEnd = center + newRange / 2;
@@ -720,12 +598,13 @@ export default function EChartCandle({
       
       e.preventDefault();
       const delta = e.clientX - startX; // Right = positive, Left = negative
-      const speed = 0.3;
+      const speed = 0.25; // Consistent with Y-axis
       const range = startZoomRange.end - startZoomRange.start;
       const change = (delta / xAxisOverlay.clientWidth) * 100 * speed;
       
-      let newRange = range - change; // Right drag = zoom in (reduce range)
-      if (newRange < 5) newRange = 5;
+      // Drag RIGHT = zoom in (reduce range), Drag LEFT = zoom out
+      let newRange = range - change;
+      if (newRange < 3) newRange = 3; // Min 3% for X
       if (newRange > 100) newRange = 100;
       
       const center = (startZoomRange.start + startZoomRange.end) / 2;

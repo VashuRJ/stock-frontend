@@ -3,10 +3,11 @@ import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Line,
 } from 'recharts'
 import EChartCandle from '@/components/EChartCandle'
+import PeriodComparisonChart from '@/components/PeriodComparisonChart'
 
 import { 
   Search, Bell, User, Plus, Activity, TrendingUp, TrendingDown, LogOut, X, Check,
-  ChevronRight, ChevronDown, Pencil, Trash2, CheckCircle2
+  ChevronRight, ChevronDown, Pencil, Trash2, CheckCircle2, ArrowLeftRight
 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '@/api/client'
@@ -121,6 +122,7 @@ export default function Dashboard() {
   const [activeIndicators, setActiveIndicators] = useState<string[]>([]) 
   const [isIndicatorMenuOpen, setIsIndicatorMenuOpen] = useState(false)
   const [isFullscreen, setIsFullscreen] = useState(false) // NEW: Fullscreen mode
+  const [showComparisonModal, setShowComparisonModal] = useState(false) // Period Comparison
   
   // Search State
   const [searchQuery, setSearchQuery] = useState('')
@@ -155,6 +157,41 @@ export default function Dashboard() {
   // 🔹 Timeframe change handler (IMPORTANT)
 const handleTimeframeChange = (tf: string) => {
   setTimeframe(tf)
+}
+
+// 🔹 Get current period dates based on timeframe
+const getCurrentPeriodDates = (): { start: string; end: string } => {
+  const today = new Date()
+  const end = today.toISOString().split('T')[0]
+  let start = new Date()
+  
+  switch (timeframe) {
+    case '1D':
+      start.setDate(today.getDate() - 1)
+      break
+    case '1W':
+      start.setDate(today.getDate() - 7)
+      break
+    case '1M':
+      start.setMonth(today.getMonth() - 1)
+      break
+    case '3M':
+      start.setMonth(today.getMonth() - 3)
+      break
+    case '6M':
+      start.setMonth(today.getMonth() - 6)
+      break
+    case '1Y':
+      start.setFullYear(today.getFullYear() - 1)
+      break
+    default:
+      start.setMonth(today.getMonth() - 1)
+  }
+  
+  return {
+    start: start.toISOString().split('T')[0],
+    end
+  }
 }
 
 // 🔹 RSI indicator loader
@@ -1402,6 +1439,16 @@ useEffect(() => {
               >
                 📈 VOLUME
               </button>
+
+              {/* Period Comparison Button */}
+              <button
+                onClick={() => setShowComparisonModal(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-[10px] font-bold rounded bg-[#1e222d] text-[#787b86] hover:text-white hover:bg-[#2962ff]/20 border border-[#2a2e39] hover:border-[#2962ff] transition-all"
+                title="Compare with different time period"
+              >
+                <ArrowLeftRight size={12} />
+                COMPARE
+              </button>
             </div>
 
 <div className="w-full min-h-0 flex-1 flex flex-col">
@@ -1769,6 +1816,15 @@ useEffect(() => {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Period Comparison Modal */}
+      {showComparisonModal && (
+        <PeriodComparisonChart
+          symbol={selectedSymbol}
+          currentPeriod={getCurrentPeriodDates()}
+          onClose={() => setShowComparisonModal(false)}
+        />
       )}
     </>
   )
