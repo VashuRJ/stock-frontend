@@ -20,10 +20,8 @@ export default function Login() {
       const { access_token, token, user } = res.data
       
       // Save to localStorage
-      localStorage.setItem('access_token', access_token || token)
-      localStorage.setItem('user_id', user.id?.toString() || '')
-      localStorage.setItem('user_name', user.full_name || email.split('@')[0])
-      localStorage.setItem('user_email', user.email || '')
+      localStorage.setItem('access_token', access_token)
+      localStorage.setItem('user_email', user.email)
       
       // Redirect to dashboard
       navigate('/dashboard')
@@ -40,10 +38,7 @@ export default function Login() {
       {/* --- LEFT SIDE: PREMIUM IMAGE --- */}
       <div className="hidden lg:block w-1/2 relative overflow-hidden">
         <div 
-          className="absolute inset-0 bg-cover bg-center transition-transform duration-[40s] ease-in-out transform hover:scale-110"
-          style={{ 
-            backgroundImage: 'url("https://images.unsplash.com/photo-1642790106117-e829e14a795f?q=80&w=2070&auto=format&fit=crop")',
-          }}
+          className="absolute inset-0 bg-cover bg-center transition-transform duration-[40s] ease-in-out transform hover:scale-110 bg-[url('https://images.unsplash.com/photo-1642790106117-e829e14a795f?q=80&w=2070&auto=format&fit=crop')]"
         ></div>
         <div className="absolute inset-0 bg-[#0e1117]/30 mix-blend-multiply"></div>
       </div>

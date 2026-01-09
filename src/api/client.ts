@@ -3,7 +3,7 @@ import axios from 'axios'
 // Use /api prefix for proxy in development, direct URL in production
 const baseURL = import.meta.env.MODE === 'development' 
   ? '/api' 
-  : import.meta.env.VITE_API_BASE || 'http://localhost:8000'
+  : import.meta.env.VITE_API_BASE
 
 export const api = axios.create({ baseURL, withCredentials: true })
 

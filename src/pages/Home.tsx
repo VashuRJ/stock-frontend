@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom';
+// import Navbar from '@/components/Navbar'
 
 // --- 1. HERO CHART COMPONENT (Visual Masterpiece) ---
 // Ye component ek fake trading interface banata hai jo real lagta hai
@@ -137,7 +138,6 @@ export default function Home() {
 
   return (
     <div className="min-h-screen bg-[#0e1117] text-[#d1d4dc] font-sans selection:bg-[#2962ff] selection:text-white">
-      
       {/* 1. TICKER TAPE (Top Bar) */}
       <div className="bg-[#131722] border-b border-[#2a2e39] overflow-hidden whitespace-nowrap py-2">
         <div className="animate-scroll inline-block min-w-full">
