@@ -1,8 +1,8 @@
 import axios from 'axios'
 
 // Use /api prefix for proxy in development, direct URL in production
-const baseURL = import.meta.env.MODE === 'development' 
-  ? '/api' 
+const baseURL = import.meta.env.MODE === 'development'
+  ? '/api'
   : import.meta.env.VITE_API_BASE
 
 export const api = axios.create({ baseURL, withCredentials: true })
@@ -28,7 +28,7 @@ api.interceptors.response.use(
         localStorage.removeItem('access_token')
         // optionally clear user email
         // localStorage.removeItem('user_email')
-      } catch {}
+      } catch { }
       // Navigate to login (soft): update location if on client
       if (typeof window !== 'undefined') {
         const current = window.location.pathname
@@ -101,11 +101,11 @@ export interface PeriodCompareResponse {
   comparison: ComparisonMetrics | null
 }
 
-export type ComparePreset = 
-  | 'previous_month' 
-  | 'same_month_last_year' 
-  | 'previous_week' 
-  | 'previous_quarter' 
+export type ComparePreset =
+  | 'previous_month'
+  | 'same_month_last_year'
+  | 'previous_week'
+  | 'previous_quarter'
   | 'custom'
 
 export interface PeriodCompareRequest {

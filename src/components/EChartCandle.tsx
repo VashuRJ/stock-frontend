@@ -1,762 +1,754 @@
-import React, { useMemo, useRef } from 'react'
-import ReactECharts from 'echarts-for-react'
+import React, { useEffect, useRef, useCallback } from 'react';
+import {
+  createChart,
+  IChartApi,
+  ISeriesApi,
+  CandlestickSeries,
+  HistogramSeries,
+  LineSeries,
+  CandlestickData,
+  HistogramData,
+  LineData,
+  Time,
+  CrosshairMode
+} from 'lightweight-charts';
 
 // --- Types ---
 type Point = {
-  time: string
-  timestamp?: number
-  open?: number
-  high?: number
-  low?: number
-  close?: number
-  volume?: number
-  sma?: number
-  ema?: number
+  time: string;
+  timestamp?: number;
+  open?: number;
+  high?: number;
+  low?: number;
+  close?: number;
+  volume?: number;
+  sma?: number;
+  ema?: number;
   bollinger?: {
-    upper: number
-    middle: number
-    lower: number
-  }
-  rsi?: number
-  macd?: number
-  macdSignal?: number
-  macdHist?: number
-}
+    upper: number;
+    middle: number;
+    lower: number;
+  };
+  rsi?: number;
+  macd?: number;
+  macdSignal?: number;
+  macdHist?: number;
+};
 
 interface EChartCandleProps {
-  data: Point[]
-  showVolume?: boolean
-  showIndicators?: boolean
-  showRSI?: boolean
-  showMACD?: boolean
+  data: Point[];
+  showVolume?: boolean;
+  showIndicators?: boolean;
+  showRSI?: boolean;
+  showMACD?: boolean;
 }
 
-export default function EChartCandle({ 
-  data, 
-  showVolume = true, 
-  showIndicators = false, 
-  showRSI = false, 
-  showMACD = false 
-}: EChartCandleProps) {
-  
-  // Ref to hold current chart instance
-  const chartRef = useRef<any>(null);
-  const overlayRef = useRef<HTMLDivElement>(null);
-  const xAxisOverlayRef = useRef<HTMLDivElement>(null);
-  const [visibleRange, setVisibleRange] = React.useState<{start: number, end: number}>({start: 0, end: 100});
-  const [showSettings, setShowSettings] = React.useState(false);
+// Helper: Convert date string to timestamp
+const parseTime = (timeStr: string, timestamp?: number): Time => {
+  // If timestamp is provided directly, use it
+  if (timestamp && timestamp > 0) {
+    // Convert milliseconds to seconds if needed
+    const ts = timestamp > 1e12 ? Math.floor(timestamp / 1000) : timestamp;
+    return ts as Time;
+  }
 
-  const option = useMemo(() => {
-    if (!data || data.length === 0) {
-      console.warn('⚠️ No chart data available');
-      return {};
-    }
+  // Handle "HH:MM" format (intraday)
+  if (/^\d{1,2}:\d{2}$/.test(timeStr)) {
+    const now = new Date();
+    const [hours, minutes] = timeStr.split(':').map(Number);
+    now.setHours(hours, minutes, 0, 0);
+    return Math.floor(now.getTime() / 1000) as Time;
+  }
 
-    try {
-      // 🛡️ DATA VALIDATION & SANITIZATION
-      const validateAndCleanData = (item: Point) => {
-      const open = Number(item.open) || 0;
-      const close = Number(item.close) || 0;
-      const high = Number(item.high) || 0;
-      const low = Number(item.low) || 0;
-      
-      // If any value is invalid, skip this candle
-      if (open <= 0 || close <= 0 || high <= 0 || low <= 0) {
-        return null;
-      }
-      
-      // Ensure data integrity: high >= max(open, close) and low <= min(open, close)
-      const actualHigh = Math.max(high, open, close);
-      const actualLow = Math.min(low, open, close);
-      
-      // Prevent zero-height candles
-      if (actualHigh === actualLow) {
-        return null;
-      }
-      
-      return { open, close, high: actualHigh, low: actualLow, volume: item.volume || 0 };
+  // Handle "Mon DD" or "Jan 12" format
+  if (/^[A-Za-z]{3}\s+\d{1,2}$/.test(timeStr)) {
+    const now = new Date();
+    const [monthStr, day] = timeStr.split(/\s+/);
+    const months: Record<string, number> = {
+      'Jan': 0, 'Feb': 1, 'Mar': 2, 'Apr': 3, 'May': 4, 'Jun': 5,
+      'Jul': 6, 'Aug': 7, 'Sep': 8, 'Oct': 9, 'Nov': 10, 'Dec': 11
     };
-    
-    // Filter and clean data
-    const validData = data
-      .map((item, index) => ({ ...validateAndCleanData(item), time: item.time, index }))
-      .filter(item => item.open !== undefined);
-    
-    if (validData.length === 0) return {};
-    
-    const dates = validData.map(item => item.time);
-    
-    // ✅ CORRECT Candle Data Mapping (ECharts format: [open, close, lowest, highest])
-    const candleValues = validData.map(item => [
-      item.open!,   // Opening price
-      item.close!,  // Closing price  
-      item.low!,    // Lowest price (this must be <= min(open, close))
-      item.high!    // Highest price (this must be >= max(open, close))
-    ]);
+    const month = months[monthStr] ?? now.getMonth();
+    const year = now.getFullYear();
+    const date = new Date(year, month, parseInt(day));
+    return Math.floor(date.getTime() / 1000) as Time;
+  }
 
-    // 📊 Volume Data (using validated data)
-    const volumes = validData.map((item) => ({
-      value: Math.max(0, item.volume!),
-      itemStyle: {
-        color: item.close! >= item.open! ? 'rgba(38, 166, 154, 0.5)' : 'rgba(239, 83, 80, 0.5)'
-      }
-    }));
+  // Handle various date formats
+  const date = new Date(timeStr);
+  if (!isNaN(date.getTime())) {
+    return Math.floor(date.getTime() / 1000) as Time;
+  }
 
-    // 📈 Indicators Data (map back to original data)
-    const smaData = validData.map(v => data[v.index!].sma ?? null);
-    const emaData = validData.map(v => data[v.index!].ema ?? null);
-    const macdLine = validData.map(v => data[v.index!].macd ?? null);
-    const macdSignal = validData.map(v => data[v.index!].macdSignal ?? null);
-    const macdHist = validData.map(v => data[v.index!].macdHist ?? null);
-    const bUpper = validData.map(v => data[v.index!].bollinger?.upper ?? null);
-    const bLower = validData.map(v => data[v.index!].bollinger?.lower ?? null);
-    const rsiData = validData.map(v => data[v.index!].rsi ?? null);
+  // Fallback: try to parse as YYYY-MM-DD
+  const parts = timeStr.split(/[-/T]/);
+  if (parts.length >= 3) {
+    const year = parseInt(parts[0]);
+    const month = parseInt(parts[1]);
+    const day = parseInt(parts[2]);
+    return Math.floor(new Date(year, month - 1, day).getTime() / 1000) as Time;
+  }
 
-    // 📊 Calculate Y-axis range (STABLE - doesn't change on pan)
-    const allPrices = candleValues.flatMap(candle => [candle[2], candle[3]]);
-    const minPrice = Math.min(...allPrices);
-    const maxPrice = Math.max(...allPrices);
-    const priceRange = maxPrice - minPrice;
-    const padding = priceRange * 0.1; // 10% padding for stability
+  return 0 as Time;
+};
 
-    return {
-      backgroundColor: '#131722',
-      animation: false,
-      
-      // 1. Tooltip
-      tooltip: {
-        trigger: 'axis',
-        axisPointer: {
-          type: 'cross', 
-          label: { backgroundColor: '#131722', color: '#fff' },
-          crossStyle: { color: '#787b86', width: 1, type: 'dashed' }
-        },
-        backgroundColor: 'rgba(19, 23, 34, 0.95)',
-        borderColor: '#2a2e39',
-        textStyle: { color: '#d1d4dc', fontSize: 12 },
-        formatter: function (params: any) {
-             if (!params || params.length === 0) return '';
-             let res = `<div style="font-weight:bold; border-bottom:1px solid #2a2e39; margin-bottom:5px; padding-bottom:5px;">${params[0].axisValue}</div>`;
-             params.forEach((p: any) => {
-                 if(p.value !== null && p.value !== undefined && p.seriesName !== 'Volume') {
-                    const val = Array.isArray(p.value) ? p.value[1] : p.value;
-                    if(val !== undefined && val !== null) {
-                        res += `<div style="display:flex; justify-content:space-between; width:140px; gap: 10px;">
-                                <span style="color:${p.color}">● ${p.seriesName}</span> 
-                                <span style="font-family:monospace">${Number(val).toFixed(2)}</span>
-                                </div>`;
-                    }
-                 }
-             });
-             return res;
-        }
-      },
+// Helper: Validate candle data
+const validateCandle = (item: Point): CandlestickData<Time> | null => {
+  const open = Number(item.open);
+  const close = Number(item.close);
+  const high = Number(item.high);
+  const low = Number(item.low);
+  const time = parseTime(item.time, item.timestamp);
 
-      axisPointer: {
-        link: { xAxisIndex: 'all' },
-        label: { backgroundColor: '#777' }
-      },
+  // Skip invalid time
+  if (!time || time === 0) {
+    console.warn('Invalid time:', item.time, item.timestamp);
+    return null;
+  }
 
-      // 2. Grid Layout (Fixed to prevent candle cutoff)
-      grid: [
-        { 
-            left: 10, 
-            right: 1,
-            top: '8%',
-            bottom: showVolume ? '32%' : '15%', // Space for volume + X-axis labels (increased padding)
-            containLabel: true
-        },
-        { 
-            left: 10, 
-            right: 30, 
-            top: showVolume ? '68%' : 'auto', // Auto height when no volume
-            height: showVolume ? '15%' : '0%',
-            containLabel: false
-        },
-        { 
-            left: 10, 
-            right: 30, 
-            bottom: '5%', // Fixed bottom margin to prevent label cutoff
-            top: showVolume ? '84%' : (100 - 15) + '%',
-            containLabel: true // Enable containLabel to ensure labels are fully visible
-        }
-      ],
+  // Skip invalid data
+  if (isNaN(open) || isNaN(close) || isNaN(high) || isNaN(low)) {
+    return null;
+  }
+  if (open <= 0 || close <= 0 || high <= 0 || low <= 0) {
+    return null;
+  }
 
-      // 3. X-Axis
-      xAxis: [
-        { 
-            type: 'category', data: dates, gridIndex: 0, 
-            axisLabel: { show: false }, axisLine: { show: false }, axisTick: { show: false }, 
-            splitLine: { show: true, lineStyle: { color: '#2a2e39', type: 'dashed', opacity: 0.3 } },
-            axisPointer: { label: { show: false } } 
-        },
-        { 
-            type: 'category', data: dates, gridIndex: 1, 
-            axisLabel: { show: false }, axisLine: { show: false }, axisTick: { show: false }, splitLine: { show: false },
-            axisPointer: { label: { show: false } }
-        },
-        { 
-            type: 'category', data: dates, gridIndex: 2, 
-            axisLabel: { show: true, color: '#8b95a1' }, axisLine: { show: false }, axisTick: { show: false }, splitLine: { show: false },
-            axisPointer: { label: { show: true } }
-        }
-      ],
+  // Ensure data integrity
+  const actualHigh = Math.max(high, open, close);
+  const actualLow = Math.min(low, open, close);
 
-      // 4. Y-Axis (Stable configuration - no jumping)
-      yAxis: [
-        { 
-            scale: true, 
-            gridIndex: 0, 
-            position: 'right',
-            min: minPrice - padding, // Stable fixed range
-            max: maxPrice + padding,
-            splitLine: { show: true, lineStyle: { color: '#2a2e39', type: 'dashed', opacity: 0.3 } },
-            axisLabel: { 
-              color: '#8b95a1', 
-              margin: 4, // Tight padding between chart and Y labels
-              formatter: (val: number) => {
-                // Smart price formatting
-                if (val >= 1000) return val.toFixed(0);
-                if (val >= 10) return val.toFixed(2);
-                return val.toFixed(4);
-              }
-            },
-            axisPointer: {
-                show: true,
-                label: { show: true, backgroundColor: '#2962ff', color: '#fff', fontWeight: 'bold' }
-            }
-        },
-        { scale: true, gridIndex: 1, show: false },
-        { type: 'value', gridIndex: 2, show: false }
-      ],
+  // Skip zero-range candles
+  if (actualHigh === actualLow) {
+    return null;
+  }
 
-      // 5. ZOOM & PAN CONFIGURATION (Professional Trading Style)
-      dataZoom: [
-        {
-          // Index 0: Horizontal (Time) - Zoom + Pan  
-          type: 'inside',
-          xAxisIndex: [0, 1, 2],
-          zoomOnMouseWheel: true,
-          moveOnMouseMove: true, // Enable horizontal pan
-          moveOnMouseWheel: false,
-          preventDefaultMouseMove: false,
-          throttle: 30,
-          zoomLock: false,
-          minSpan: 2,
-          maxSpan: 100,
-          filterMode: 'none'
-        },
-        {
-          // Index 1: Vertical (Price) - Pan enabled
-          type: 'inside',
-          yAxisIndex: 0,
-          zoomOnMouseWheel: false, // Y-zoom handled by overlay
-          moveOnMouseMove: true, // ✅ Enable vertical pan (drag up/down)
-          moveOnMouseWheel: false,
-          preventDefaultMouseMove: false,
-          throttle: 30,
-          zoomLock: false,
-          minSpan: 2,
-          maxSpan: 100,
-          orient: 'vertical',
-          filterMode: 'none'
-        }
-      ],
-
-      series: [
-        {
-          name: 'Price',
-          type: 'candlestick',
-          data: candleValues,
-          clip: true, // 🚀 Clip candles at grid boundaries (prevents X-axis overlap)
-          itemStyle: {
-            color: '#089981',
-            color0: '#f23645',
-            borderColor: '#089981',
-            borderColor0: '#f23645',
-            borderWidth: 1
-          },
-          // 🎯 Smart bar width - auto-calculated by ECharts based on zoom
-          barWidth: validData.length > 200 ? '60%' : validData.length > 100 ? '70%' : '80%',
-          barMaxWidth: 20, // Allow wider candles when zoomed in
-          barMinWidth: 0.5, // Thinner lines when zoomed out
-          large: true, // Enable large dataset optimization
-          largeThreshold: 500 // Optimize when > 500 candles
-        },
-        ...(showVolume ? [{
-          name: 'Volume',
-          type: 'bar',
-          xAxisIndex: 1,
-          yAxisIndex: 1,
-          data: volumes,
-          // 🎯 Smart volume bar width - auto-calculated by ECharts
-          barWidth: validData.length > 200 ? '60%' : validData.length > 100 ? '70%' : '80%',
-          barMaxWidth: 20,
-          barMinWidth: 0.5,
-          large: true,
-          largeThreshold: 500
-        }] : []),
-        
-        // Indicators...
-        ...(showIndicators ? [
-          { name: 'SMA(20)', type: 'line', data: smaData, smooth: true, symbol: 'none', lineStyle: { width: 1.5, color: '#ff9800' } },
-          { name: 'EMA(12)', type: 'line', data: emaData, smooth: true, symbol: 'none', lineStyle: { width: 1.5, color: '#2962ff' } }
-        ] : []),
-        
-        ...(showIndicators && bUpper.some(v => v !== null) ? [
-             { name: 'BB Upper', type: 'line', data: bUpper, symbol: 'none', lineStyle: { width: 1, color: 'rgba(187, 134, 252, 0.6)' } },
-             { name: 'BB Lower', type: 'line', data: bLower, symbol: 'none', lineStyle: { width: 1, color: 'rgba(187, 134, 252, 0.6)' } }
-        ] : []),
-
-        ...(showRSI ? [
-             { name: 'RSI', type: 'line', data: rsiData, xAxisIndex: 2, yAxisIndex: 2, symbol: 'none', lineStyle: { color: '#fbc02d', width: 1.5 } },
-             { name: '70', type: 'line', data: rsiData.map(() => 70), xAxisIndex: 2, yAxisIndex: 2, symbol: 'none', lineStyle: { color: '#ef5350', type: 'dashed', width: 1 } },
-             { name: '30', type: 'line', data: rsiData.map(() => 30), xAxisIndex: 2, yAxisIndex: 2, symbol: 'none', lineStyle: { color: '#26a69a', type: 'dashed', width: 1 } }
-        ] : []),
-
-        ...(showMACD ? [
-             { name: 'MACD', type: 'line', data: macdLine, xAxisIndex: 2, yAxisIndex: 2, symbol: 'none', lineStyle: { color: '#4caf50', width: 1.5 } },
-             { name: 'Signal', type: 'line', data: macdSignal, xAxisIndex: 2, yAxisIndex: 2, symbol: 'none', lineStyle: { color: '#ff9800', width: 1.5 } },
-             { name: 'Hist', type: 'bar', data: macdHist, xAxisIndex: 2, yAxisIndex: 2, itemStyle: { color: (p: any) => p.value > 0 ? '#26a69a' : '#ef5350' } }
-        ] : [])
-      ]
-    };
-    } catch (error) {
-      console.error('❌ Chart rendering error:', error);
-      return {
-        backgroundColor: '#131722',
-        title: {
-          text: 'Chart Error - Invalid Data',
-          left: 'center',
-          top: 'center',
-          textStyle: { color: '#f23645', fontSize: 16 }
-        }
-      };
-    }
-  }, [data, showVolume, showIndicators, showRSI, showMACD])
-
-  // --- 🔥 PROFESSIONAL ZOOM + PAN (TradingView Style) ---
-  const onChartReady = (chart: any) => {
-    chartRef.current = chart;
-    const zr = chart.getZr();
-    const chartDom = zr.dom;
-
-    // 📊 Listen to dataZoom changes to update visible range
-    chart.on('dataZoom', (params: any) => {
-      const xModel = chart.getModel().getComponent('dataZoom', 0);
-      if (xModel) {
-        const newStart = xModel.option.start || 0;
-        const newEnd = xModel.option.end || 100;
-        setVisibleRange({ start: newStart, end: newEnd });
-      }
-    });
-
-    // Helper: Check if mouse is in Y-axis area
-    const isInYAxisArea = (offsetX: number, width: number) => {
-      return offsetX > width - 70; // Right 70px is Y-axis zone
-    };
-    
-    // Helper: Check if mouse is in X-axis area  
-    const isInXAxisArea = (offsetY: number, height: number) => {
-      return offsetY > height - 35; // Bottom 35px is X-axis zone
-    };
-    
-    // Helper: Check if mouse is in chart center (pan area)
-    const isInChartCenter = (offsetX: number, width: number, offsetY: number, height: number) => {
-      return offsetX < width - 70 && offsetX > 10 && offsetY < height - 35 && offsetY > 0;
-    };
-
-    // Helper: Apply vertical zoom
-    const applyVerticalZoom = (newStart: number, newEnd: number) => {
-      chart.dispatchAction({
-        type: 'dataZoom',
-        dataZoomIndex: 1,
-        start: Math.max(0, newStart),
-        end: Math.min(100, newEnd)
-      });
-    };
-
-    // 1. 🎨 CURSOR FEEDBACK: Dynamic cursor based on area
-    zr.on('mousemove', (params: any) => {
-      const width = chart.getWidth();
-      const height = chart.getHeight();
-      const onYAxis = isInYAxisArea(params.offsetX, width);
-      const onXAxis = isInXAxisArea(params.offsetY, height);
-      const inCenter = isInChartCenter(params.offsetX, width, params.offsetY, height);
-      
-      // Set cursor based on area
-      if (onYAxis) {
-        chartDom.style.cursor = 'ns-resize'; // ↕ cursor for Y-axis
-      } else if (onXAxis) {
-        chartDom.style.cursor = 'ew-resize'; // ↔ cursor for X-axis
-      } else if (inCenter) {
-        chartDom.style.cursor = 'grab'; // ✋ cursor for pan
-      } else {
-        chartDom.style.cursor = 'default';
-      }
-    });
-
-    // 2. 🔄 DOUBLE CLICK: Reset zoom
-    let lastClickTime = 0;
-    zr.on('dblclick', (params: any) => {
-      const now = Date.now();
-      if (now - lastClickTime < 300) return; // Prevent rapid double-clicks
-      lastClickTime = now;
-      
-      const width = chart.getWidth();
-      const height = chart.getHeight();
-      
-      if (isInYAxisArea(params.offsetX, width)) {
-        // Reset Y-zoom only
-        applyVerticalZoom(0, 100);
-      } else if (isInXAxisArea(params.offsetY, height)) {
-        // Reset X-zoom only
-        chart.dispatchAction({ type: 'dataZoom', dataZoomIndex: 0, start: 0, end: 100 });
-      } else {
-        // Reset both X and Y zoom
-        chart.dispatchAction({ type: 'dataZoom', dataZoomIndex: 0, start: 0, end: 100 });
-        applyVerticalZoom(0, 100);
-      }
-    });
+  return {
+    time,
+    open,
+    high: actualHigh,
+    low: actualLow,
+    close,
   };
-  
-  // 🎯 OVERLAY EVENTS: Handle events on overlay div
-  React.useEffect(() => {
-    if (!overlayRef.current || !chartRef.current) return;
-    
-    const overlay = overlayRef.current;
-    const chart = chartRef.current;
-    let isDragging = false;
-    let startY = 0;
-    let startZoomRange = { start: 0, end: 100 };
-    
-    const getCurrentZoomRange = () => {
-      const model = chart.getModel().getComponent('dataZoom', 1);
-      return model ? { start: model.option.start || 0, end: model.option.end || 100 } : { start: 0, end: 100 };
-    };
-    
-    const applyVerticalZoom = (newStart: number, newEnd: number) => {
-      chart.dispatchAction({
-        type: 'dataZoom',
-        dataZoomIndex: 1,
-        start: Math.max(0, newStart),
-        end: Math.min(100, newEnd)
-      });
-    };
-    
-    // Wheel event on overlay (Y-axis zoom)
-    const handleOverlayWheel = (e: WheelEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-      
-      const zoomRange = getCurrentZoomRange();
-      const range = zoomRange.end - zoomRange.start;
-      // Scroll UP = zoom in (reduce range), Scroll DOWN = zoom out (increase range)
-      const direction = e.deltaY > 0 ? 1 : -1;
-      const zoomFactor = 0.08; // 8% per scroll step
-      
-      let newRange = range + (range * zoomFactor * direction);
-      if (newRange < 5) newRange = 5; // Min 5% range
-      if (newRange > 100) newRange = 100;
-      
-      const center = (zoomRange.start + zoomRange.end) / 2;
-      let newStart = center - newRange / 2;
-      let newEnd = center + newRange / 2;
-      
-      if (newStart < 0) { newStart = 0; newEnd = newRange; }
-      if (newEnd > 100) { newEnd = 100; newStart = 100 - newRange; }
-      
-      applyVerticalZoom(newStart, newEnd);
-    };
-    
-    // Drag events on overlay - TradingView style (single click + drag)
-    const handleMouseDown = (e: MouseEvent) => {
-      e.preventDefault();
-      e.stopPropagation(); // Prevent event bubbling
-      isDragging = true;
-      startY = e.clientY;
-      startZoomRange = getCurrentZoomRange();
-      overlay.style.cursor = 'ns-resize';
-    };
-    
-    const handleMouseMove = (e: MouseEvent) => {
-      if (!isDragging) return;
-      
-      e.preventDefault();
-      const delta = startY - e.clientY;
-      const speed = 0.25; // Smooth drag speed
-      const range = startZoomRange.end - startZoomRange.start;
-      const change = (delta / overlay.clientHeight) * 100 * speed;
-      
-      // Drag UP = zoom in (reduce range), Drag DOWN = zoom out (increase range)
-      let newRange = range - change;
-      if (newRange < 5) newRange = 5; // Min 5% range
-      if (newRange > 100) newRange = 100;
-      
-      const center = (startZoomRange.start + startZoomRange.end) / 2;
-      let newStart = center - newRange / 2;
-      let newEnd = center + newRange / 2;
-      
-      if (newStart < 0) { newStart = 0; newEnd = newRange; }
-      if (newEnd > 100) { newEnd = 100; newStart = 100 - newRange; }
-      
-      applyVerticalZoom(newStart, newEnd);
-    };
-    
-    const handleMouseUp = (e: MouseEvent) => {
-      if (isDragging) {
-        e.preventDefault();
-        e.stopPropagation(); // Prevent click events after drag
-        isDragging = false;
-        overlay.style.cursor = 'ns-resize';
-      }
-    };
-    
-    const handleDoubleClick = (e: MouseEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-      applyVerticalZoom(0, 100);
-    };
-    
-    // Attach listeners
-    overlay.addEventListener('wheel', handleOverlayWheel, { passive: false });
-    overlay.addEventListener('mousedown', handleMouseDown);
-    overlay.addEventListener('dblclick', handleDoubleClick);
-    document.addEventListener('mousemove', handleMouseMove); // Document level for smooth dragging
-    document.addEventListener('mouseup', handleMouseUp); // Document level to catch release anywhere
-    
-    return () => {
-      overlay.removeEventListener('wheel', handleOverlayWheel);
-      overlay.removeEventListener('mousedown', handleMouseDown);
-      overlay.removeEventListener('dblclick', handleDoubleClick);
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
-    };
-  }, [chartRef.current, showVolume]);
+};
 
-  // 🎯 X-AXIS OVERLAY EVENTS: Handle horizontal zoom
-  React.useEffect(() => {
-    if (!xAxisOverlayRef.current || !chartRef.current) return;
-    
-    const xAxisOverlay = xAxisOverlayRef.current;
-    const chart = chartRef.current;
-    let isDragging = false;
-    let startX = 0;
-    let startZoomRange = { start: 0, end: 100 };
-    
-    const getCurrentXZoomRange = () => {
-      const model = chart.getModel().getComponent('dataZoom', 0);
-      return model ? { start: model.option.start || 0, end: model.option.end || 100 } : { start: 0, end: 100 };
-    };
-    
-    const applyHorizontalZoom = (newStart: number, newEnd: number) => {
-      chart.dispatchAction({
-        type: 'dataZoom',
-        dataZoomIndex: 0,
-        start: Math.max(0, newStart),
-        end: Math.min(100, newEnd)
-      });
-    };
-    
-    // Wheel event on X-axis overlay (time zoom)
-    const handleXAxisWheel = (e: WheelEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-      
-      const zoomRange = getCurrentXZoomRange();
-      const range = zoomRange.end - zoomRange.start;
-      // Scroll UP = zoom in, Scroll DOWN = zoom out
-      const direction = e.deltaY > 0 ? 1 : -1;
-      const zoomFactor = 0.08; // 8% per scroll step (consistent with Y-axis)
-      
-      let newRange = range + (range * zoomFactor * direction);
-      if (newRange < 3) newRange = 3; // Min 3% for X (can zoom in more)
-      if (newRange > 100) newRange = 100;
-      
-      // Zoom centered on current view
-      const center = (zoomRange.start + zoomRange.end) / 2;
-      let newStart = center - newRange / 2;
-      let newEnd = center + newRange / 2;
-      
-      if (newStart < 0) { newStart = 0; newEnd = newRange; }
-      if (newEnd > 100) { newEnd = 100; newStart = 100 - newRange; }
-      
-      applyHorizontalZoom(newStart, newEnd);
-    };
-    
-    // Drag events on X-axis overlay - TradingView style
-    const handleMouseDown = (e: MouseEvent) => {
-      e.preventDefault();
-      isDragging = true;
-      startX = e.clientX;
-      startZoomRange = getCurrentXZoomRange();
-      xAxisOverlay.style.cursor = 'ew-resize';
-    };
-    
-    const handleMouseMove = (e: MouseEvent) => {
-      if (!isDragging) return;
-      
-      e.preventDefault();
-      const delta = e.clientX - startX; // Right = positive, Left = negative
-      const speed = 0.25; // Consistent with Y-axis
-      const range = startZoomRange.end - startZoomRange.start;
-      const change = (delta / xAxisOverlay.clientWidth) * 100 * speed;
-      
-      // Drag RIGHT = zoom in (reduce range), Drag LEFT = zoom out
-      let newRange = range - change;
-      if (newRange < 3) newRange = 3; // Min 3% for X
-      if (newRange > 100) newRange = 100;
-      
-      const center = (startZoomRange.start + startZoomRange.end) / 2;
-      let newStart = center - newRange / 2;
-      let newEnd = center + newRange / 2;
-      
-      if (newStart < 0) { newStart = 0; newEnd = newRange; }
-      if (newEnd > 100) { newEnd = 100; newStart = 100 - newRange; }
-      
-      applyHorizontalZoom(newStart, newEnd);
-    };
-    
-    const handleMouseUp = (e: MouseEvent) => {
-      if (isDragging) {
-        e.preventDefault();
-        isDragging = false;
-        xAxisOverlay.style.cursor = 'ew-resize';
+export default function EChartCandle({
+  data,
+  showVolume = true,
+  showIndicators = false,
+  showRSI = false,
+  showMACD = false,
+}: EChartCandleProps) {
+  const chartContainerRef = useRef<HTMLDivElement>(null);
+  const chartRef = useRef<IChartApi | null>(null);
+  const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
+  const volumeSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null);
+  const smaSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+  const emaSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+  const bbUpperSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+  const bbLowerSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+  const bbMiddleSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+  const rsiSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+  const rsi70Ref = useRef<ISeriesApi<'Line'> | null>(null);
+  const rsi30Ref = useRef<ISeriesApi<'Line'> | null>(null);
+  const macdLineRef = useRef<ISeriesApi<'Line'> | null>(null);
+  const macdSignalRef = useRef<ISeriesApi<'Line'> | null>(null);
+  const macdHistRef = useRef<ISeriesApi<'Histogram'> | null>(null);
+  const resizeObserverRef = useRef<ResizeObserver | null>(null);
+  const isChartInitialized = useRef<boolean>(false);
+  const prevDataLength = useRef<number>(0);
+
+
+  // Memoize processed data
+  const processedData = React.useMemo(() => {
+    if (!data || data.length === 0) {
+      console.warn('No data provided to chart');
+      return null;
+    }
+
+    console.log('Processing chart data:', data.length, 'points');
+    console.log('Sample data point:', data[0]);
+
+    // Sort data by time and remove duplicates
+    const sortedData = [...data].sort((a, b) => {
+      const timeA = parseTime(a.time, a.timestamp);
+      const timeB = parseTime(b.time, b.timestamp);
+      return (timeA as number) - (timeB as number);
+    });
+
+    // Remove duplicates by time
+    const uniqueData: Point[] = [];
+    const seenTimes = new Set<number>();
+    for (const item of sortedData) {
+      const time = parseTime(item.time, item.timestamp) as number;
+      if (time > 0 && !seenTimes.has(time)) {
+        seenTimes.add(time);
+        uniqueData.push(item);
       }
-    };
-    
-    const handleDoubleClick = (e: MouseEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-      applyHorizontalZoom(0, 100);
-    };
-    
-    // Attach listeners
-    xAxisOverlay.addEventListener('wheel', handleXAxisWheel, { passive: false });
-    xAxisOverlay.addEventListener('mousedown', handleMouseDown);
-    xAxisOverlay.addEventListener('dblclick', handleDoubleClick);
-    document.addEventListener('mousemove', handleMouseMove);
-    document.addEventListener('mouseup', handleMouseUp);
-    
+    }
+
+    console.log('Unique data points:', uniqueData.length);
+
+    // Process candle data
+    const candleData: CandlestickData<Time>[] = [];
+    const volumeData: HistogramData<Time>[] = [];
+    const smaData: LineData<Time>[] = [];
+    const emaData: LineData<Time>[] = [];
+    const bbUpperData: LineData<Time>[] = [];
+    const bbMiddleData: LineData<Time>[] = [];
+    const bbLowerData: LineData<Time>[] = [];
+    const rsiData: LineData<Time>[] = [];
+    const macdLineData: LineData<Time>[] = [];
+    const macdSignalData: LineData<Time>[] = [];
+    const macdHistData: HistogramData<Time>[] = [];
+
+    for (const item of uniqueData) {
+      const candle = validateCandle(item);
+      if (!candle) continue;
+
+      candleData.push(candle);
+
+      // Volume data
+      if (item.volume !== undefined && item.volume > 0) {
+        volumeData.push({
+          time: candle.time,
+          value: item.volume,
+          color: candle.close >= candle.open
+            ? 'rgba(38, 166, 154, 0.5)'
+            : 'rgba(239, 83, 80, 0.5)',
+        });
+      }
+
+      // Indicator data - SMA
+      if (item.sma !== undefined && item.sma !== null && !isNaN(item.sma)) {
+        smaData.push({ time: candle.time, value: item.sma });
+      }
+      // Indicator data - EMA
+      if (item.ema !== undefined && item.ema !== null && !isNaN(item.ema)) {
+        emaData.push({ time: candle.time, value: item.ema });
+      }
+      // Bollinger Bands
+      if (item.bollinger?.upper !== undefined && !isNaN(item.bollinger.upper)) {
+        bbUpperData.push({ time: candle.time, value: item.bollinger.upper });
+      }
+      if (item.bollinger?.middle !== undefined && !isNaN(item.bollinger.middle)) {
+        bbMiddleData.push({ time: candle.time, value: item.bollinger.middle });
+      }
+      if (item.bollinger?.lower !== undefined && !isNaN(item.bollinger.lower)) {
+        bbLowerData.push({ time: candle.time, value: item.bollinger.lower });
+      }
+      // RSI data
+      if (item.rsi !== undefined && item.rsi !== null && !isNaN(item.rsi)) {
+        rsiData.push({ time: candle.time, value: item.rsi });
+      }
+      // MACD data
+      if (item.macd !== undefined && item.macd !== null && !isNaN(item.macd)) {
+        macdLineData.push({ time: candle.time, value: item.macd });
+      }
+      if (item.macdSignal !== undefined && item.macdSignal !== null && !isNaN(item.macdSignal)) {
+        macdSignalData.push({ time: candle.time, value: item.macdSignal });
+      }
+      if (item.macdHist !== undefined && item.macdHist !== null && !isNaN(item.macdHist)) {
+        macdHistData.push({
+          time: candle.time,
+          value: item.macdHist,
+          color: item.macdHist >= 0 ? '#26a69a' : '#ef5350',
+        });
+      }
+    }
+
+    console.log('Valid candles:', candleData.length);
+    console.log('SMA data points:', smaData.length);
+    console.log('EMA data points:', emaData.length);
+    console.log('Bollinger data points:', bbUpperData.length);
+    console.log('RSI data points:', rsiData.length);
+    console.log('MACD data points:', macdLineData.length);
+    if (candleData.length > 0) {
+      console.log('First candle:', candleData[0]);
+      console.log('Last candle:', candleData[candleData.length - 1]);
+    }
+
+    return { candleData, volumeData, smaData, emaData, bbUpperData, bbMiddleData, bbLowerData, rsiData, macdLineData, macdSignalData, macdHistData };
+  }, [data]);
+
+  // Initialize chart ONCE
+  useEffect(() => {
+    if (!chartContainerRef.current || isChartInitialized.current) return;
+
+    // Create chart with v5 API
+    const chart = createChart(chartContainerRef.current, {
+      layout: {
+        background: { color: '#131722' },
+        textColor: '#d1d4dc',
+      },
+      grid: {
+        vertLines: { color: '#2a2e39' },
+        horzLines: { color: '#2a2e39' },
+      },
+      crosshair: {
+        mode: CrosshairMode.Normal,
+        vertLine: {
+          color: '#787b86',
+          width: 1,
+          style: 2, // Dashed
+          labelBackgroundColor: '#2962ff',
+        },
+        horzLine: {
+          color: '#787b86',
+          width: 1,
+          style: 2,
+          labelBackgroundColor: '#2962ff',
+        },
+      },
+      rightPriceScale: {
+        borderColor: '#2a2e39',
+        scaleMargins: {
+          top: 0.1,
+          bottom: showVolume ? 0.25 : 0.1,
+        },
+        autoScale: false,
+        mode: 0, // Normal price scale mode
+      },
+      timeScale: {
+        borderColor: '#2a2e39',
+        timeVisible: true,
+        secondsVisible: false,
+        rightOffset: 5,
+        barSpacing: 8,
+        minBarSpacing: 2,
+        fixLeftEdge: false,
+        fixRightEdge: false,
+      },
+      handleScroll: {
+        mouseWheel: true,
+        pressedMouseMove: true,
+        horzTouchDrag: true,
+        vertTouchDrag: true,
+      },
+      handleScale: {
+        axisPressedMouseMove: {
+          time: true,
+          price: true,
+        },
+        axisDoubleClickReset: {
+          time: true,
+          price: true,
+        },
+        mouseWheel: true,
+        pinch: true,
+      },
+      kineticScroll: {
+        touch: true,
+        mouse: true,
+      },
+    });
+
+    chartRef.current = chart;
+    isChartInitialized.current = true;
+
+    // Create candlestick series - v5 API
+    const candleSeries = chart.addSeries(CandlestickSeries, {
+      upColor: '#089981',
+      downColor: '#f23645',
+      borderUpColor: '#089981',
+      borderDownColor: '#f23645',
+      wickUpColor: '#089981',
+      wickDownColor: '#f23645',
+    });
+    candleSeriesRef.current = candleSeries;
+
+    // Create volume series - ALWAYS create (visibility controlled separately)
+    const volumeSeries = chart.addSeries(HistogramSeries, {
+      color: '#26a69a',
+      priceFormat: {
+        type: 'volume',
+      },
+      priceScaleId: 'volume',
+      visible: showVolume, // Control visibility based on prop
+    });
+
+    chart.priceScale('volume').applyOptions({
+      scaleMargins: {
+        top: 0.8,
+        bottom: 0,
+      },
+      visible: showVolume, // Hide price scale too when volume is hidden
+    });
+
+    volumeSeriesRef.current = volumeSeries;
+
+    // 🎯 Always create indicator series (TradingView style - they show/hide based on data)
+    // SMA line - Orange
+    const smaSeries = chart.addSeries(LineSeries, {
+      color: '#ff9800',
+      lineWidth: 2,
+      title: 'SMA',
+      priceScaleId: 'right',
+      lastValueVisible: true,
+      priceLineVisible: false,
+    });
+    smaSeriesRef.current = smaSeries;
+
+    // EMA line - Blue  
+    const emaSeries = chart.addSeries(LineSeries, {
+      color: '#2962ff',
+      lineWidth: 2,
+      title: 'EMA',
+      priceScaleId: 'right',
+      lastValueVisible: true,
+      priceLineVisible: false,
+    });
+    emaSeriesRef.current = emaSeries;
+
+    // Bollinger Bands - Purple
+    const bbUpperSeries = chart.addSeries(LineSeries, {
+      color: 'rgba(187, 134, 252, 0.8)',
+      lineWidth: 1,
+      title: 'BB Upper',
+      priceScaleId: 'right',
+      lastValueVisible: false,
+      priceLineVisible: false,
+    });
+    bbUpperSeriesRef.current = bbUpperSeries;
+
+    const bbMiddleSeries = chart.addSeries(LineSeries, {
+      color: 'rgba(187, 134, 252, 0.5)',
+      lineWidth: 1,
+      lineStyle: 2, // Dashed
+      title: 'BB Middle',
+      priceScaleId: 'right',
+      lastValueVisible: false,
+      priceLineVisible: false,
+    });
+    bbMiddleSeriesRef.current = bbMiddleSeries;
+
+    const bbLowerSeries = chart.addSeries(LineSeries, {
+      color: 'rgba(187, 134, 252, 0.8)',
+      lineWidth: 1,
+      title: 'BB Lower',
+      priceScaleId: 'right',
+      lastValueVisible: false,
+      priceLineVisible: false,
+    });
+    bbLowerSeriesRef.current = bbLowerSeries;
+
+    // 📊 RSI Indicator (separate price scale - TradingView style)
+    const rsiSeries = chart.addSeries(LineSeries, {
+      color: '#fbc02d',
+      lineWidth: 2,
+      title: 'RSI',
+      priceScaleId: 'rsi',
+      lastValueVisible: true,
+      priceLineVisible: false,
+    });
+    rsiSeriesRef.current = rsiSeries;
+
+    // RSI overbought line (70)
+    const rsi70 = chart.addSeries(LineSeries, {
+      color: '#ef5350',
+      lineWidth: 1,
+      lineStyle: 2,
+      title: '',
+      priceScaleId: 'rsi',
+      lastValueVisible: false,
+      priceLineVisible: false,
+    });
+    rsi70Ref.current = rsi70;
+
+    // RSI oversold line (30)
+    const rsi30 = chart.addSeries(LineSeries, {
+      color: '#26a69a',
+      lineWidth: 1,
+      lineStyle: 2,
+      title: '',
+      priceScaleId: 'rsi',
+      lastValueVisible: false,
+      priceLineVisible: false,
+    });
+    rsi30Ref.current = rsi30;
+
+    // RSI price scale config - Initially hidden, shown dynamically when data exists
+    chart.priceScale('rsi').applyOptions({
+      scaleMargins: { top: 0.75, bottom: 0.08 },
+      borderVisible: false,
+      visible: false, // Hidden by default
+    });
+
+    // 📈 MACD Indicator (separate price scale)
+    const macdLine = chart.addSeries(LineSeries, {
+      color: '#2962ff',
+      lineWidth: 2,
+      title: 'MACD',
+      priceScaleId: 'macd',
+      lastValueVisible: true,
+      priceLineVisible: false,
+    });
+    macdLineRef.current = macdLine;
+
+    const macdSignal = chart.addSeries(LineSeries, {
+      color: '#ff9800',
+      lineWidth: 2,
+      title: 'Signal',
+      priceScaleId: 'macd',
+      lastValueVisible: true,
+      priceLineVisible: false,
+    });
+    macdSignalRef.current = macdSignal;
+
+    const macdHist = chart.addSeries(HistogramSeries, {
+      color: '#26a69a',
+      priceScaleId: 'macd',
+      title: 'Histogram',
+      lastValueVisible: false,
+      priceLineVisible: false,
+    });
+    macdHistRef.current = macdHist;
+
+    // MACD price scale config - Initially hidden, shown dynamically when data exists
+    chart.priceScale('macd').applyOptions({
+      scaleMargins: { top: 0.75, bottom: 0.05 },
+      borderVisible: false,
+      visible: false, // Hidden by default
+    });
+
+    // Setup resize observer
+    const resizeObserver = new ResizeObserver((entries) => {
+      if (entries.length === 0 || !chartContainerRef.current) return;
+      const { width, height } = entries[0].contentRect;
+      chart.applyOptions({ width, height });
+    });
+
+    resizeObserver.observe(chartContainerRef.current);
+    resizeObserverRef.current = resizeObserver;
+
+
+
+    // Cleanup
     return () => {
-      xAxisOverlay.removeEventListener('wheel', handleXAxisWheel);
-      xAxisOverlay.removeEventListener('mousedown', handleMouseDown);
-      xAxisOverlay.removeEventListener('dblclick', handleDoubleClick);
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
+      resizeObserver.disconnect();
+
+      chart.remove();
+      chartRef.current = null;
+      candleSeriesRef.current = null;
+      volumeSeriesRef.current = null;
+      smaSeriesRef.current = null;
+      emaSeriesRef.current = null;
+      bbUpperSeriesRef.current = null;
+      bbMiddleSeriesRef.current = null;
+      bbLowerSeriesRef.current = null;
+      rsiSeriesRef.current = null;
+      rsi70Ref.current = null;
+      rsi30Ref.current = null;
+      macdLineRef.current = null;
+      macdSignalRef.current = null;
+      macdHistRef.current = null;
+      isChartInitialized.current = false;
     };
-  }, [chartRef.current]);
+  }, []); // Initialize chart ONLY ONCE - no dependencies
+
+  // 🔄 Consolidated Layout & Data Update Effect
+  useEffect(() => {
+    if (!chartRef.current || !processedData) return;
+
+    const chart = chartRef.current;
+
+    // 1. Update Data
+    if (candleSeriesRef.current) candleSeriesRef.current.setData(processedData.candleData);
+    if (volumeSeriesRef.current) volumeSeriesRef.current.setData(processedData.volumeData);
+    if (smaSeriesRef.current) smaSeriesRef.current.setData(processedData.smaData);
+    if (emaSeriesRef.current) emaSeriesRef.current.setData(processedData.emaData);
+    if (bbUpperSeriesRef.current) bbUpperSeriesRef.current.setData(processedData.bbUpperData);
+    if (bbMiddleSeriesRef.current) bbMiddleSeriesRef.current.setData(processedData.bbMiddleData);
+    if (bbLowerSeriesRef.current) bbLowerSeriesRef.current.setData(processedData.bbLowerData);
+
+    // 2. Refresh Indicators data
+    const hasRSI = processedData.rsiData.length > 0;
+    const hasMACD = processedData.macdLineData.length > 0;
+
+    if (rsiSeriesRef.current) rsiSeriesRef.current.setData(processedData.rsiData);
+    if (rsi70Ref.current && hasRSI) rsi70Ref.current.setData(processedData.rsiData.map(d => ({ time: d.time, value: 70 })));
+    if (rsi30Ref.current && hasRSI) rsi30Ref.current.setData(processedData.rsiData.map(d => ({ time: d.time, value: 30 })));
+
+    if (macdLineRef.current) macdLineRef.current.setData(processedData.macdLineData);
+    if (macdSignalRef.current) macdSignalRef.current.setData(processedData.macdSignalData);
+    if (macdHistRef.current) macdHistRef.current.setData(processedData.macdHistData);
+
+    // 3. 📐 CALCULATE LAYOUT MARGINS
+    // Precise calculations to strictly prevent overlap
+    // Layout strategy: Stack from bottom up.
+    // Bottom 0.02 padding.
+    // MACD (if active): Height 0.16.
+    // Padding 0.02.
+    // RSI (if active): Height 0.16.
+    // Padding 0.02.
+    // Main Chart: Remains.
+
+    const PANE_PADDING = 0.02;
+    const INDICATOR_HEIGHT = 0.16; // 16% height per indicator
+
+    let currentBottom = PANE_PADDING; // Start from bottom of screen
+
+    // --- MACD Pane ---
+    let macdResultMargins = { top: 0, bottom: 0 };
+    let showMACDPane = false;
+
+    if (hasMACD) {
+      showMACDPane = true;
+      const macdBottom = currentBottom;
+      const macdTop = 1.0 - (macdBottom + INDICATOR_HEIGHT); // Convert to 'top' margin
+
+      // Scale Margins: top is distance from top, bottom is distance from bottom
+      macdResultMargins = {
+        top: macdTop,
+        bottom: macdBottom
+      };
+
+      currentBottom += INDICATOR_HEIGHT + PANE_PADDING; // Move up
+    }
+
+    // --- RSI Pane ---
+    let rsiResultMargins = { top: 0, bottom: 0 };
+    let showRSIPane = false;
+
+    if (hasRSI) {
+      showRSIPane = true;
+      const rsiBottom = currentBottom;
+      const rsiTop = 1.0 - (rsiBottom + INDICATOR_HEIGHT);
+
+      rsiResultMargins = {
+        top: rsiTop,
+        bottom: rsiBottom
+      };
+
+      currentBottom += INDICATOR_HEIGHT + PANE_PADDING; // Move up
+    }
+
+    // --- Main Chart ---
+    // The rest of the space is for Main Chart
+    // Main Bottom Margin = currentBottom
+    const mainBottomMargin = currentBottom;
+
+    // Apply Main Chart Margins
+    chart.priceScale('right').applyOptions({
+      scaleMargins: {
+        top: 0.05,
+        bottom: mainBottomMargin,
+      },
+      autoScale: false,
+    });
+
+    // Apply Volume Margins (Overlay at bottom of Main Chart)
+    // Volume takes bottom 15% of the MAIN CHART AREA (not screen) 
+    // Wait, simpler: Volume takes 15% screen height, sitting just above the mainBottomMargin.
+    const VOLUME_HEIGHT = 0.15;
+    const volumeTopMargin = 1.0 - (mainBottomMargin + VOLUME_HEIGHT);
+
+    chart.priceScale('volume').applyOptions({
+      visible: showVolume,
+      scaleMargins: {
+        top: volumeTopMargin,
+        bottom: mainBottomMargin,
+      },
+    });
+
+    // Apply RSI Margins
+    chart.priceScale('rsi').applyOptions({
+      visible: showRSIPane,
+      scaleMargins: rsiResultMargins,
+      borderVisible: true,
+      borderColor: '#2a2e39',
+    });
+
+    // Apply MACD Margins
+    chart.priceScale('macd').applyOptions({
+      visible: showMACDPane,
+      scaleMargins: macdResultMargins,
+      borderVisible: true,
+      borderColor: '#2a2e39',
+    });
+
+    // 4. Fit Content if needed
+    const currentLength = processedData.candleData.length;
+    if (prevDataLength.current === 0 || Math.abs(currentLength - prevDataLength.current) > 50) {
+      chart.timeScale().fitContent();
+    }
+    prevDataLength.current = currentLength;
+
+  }, [processedData, showVolume]);
+
+  // Reset zoom handler
+  const handleResetZoom = useCallback(() => {
+    if (chartRef.current) {
+      chartRef.current.timeScale().fitContent();
+    }
+  }, []);
+
+  // No data fallback
+  if (!data || data.length === 0) {
+    return (
+      <div className="w-full h-full flex items-center justify-center bg-[#131722] text-gray-400">
+        <div className="text-center">
+          <div className="text-4xl mb-2">📊</div>
+          <div>No chart data available</div>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="w-full h-full relative">
-        <ReactECharts 
-            ref={chartRef}
-            key={showIndicators ? 'indicators-on' : 'indicators-off'}
-            option={option} 
-            style={{ 
-              height: '100%', 
-              width: '100%',
-              cursor: 'grab' // ✋ Hand cursor for pan
-            }} 
-            notMerge={true}
-            lazyUpdate={false}
-            onChartReady={onChartReady}
-            theme="dark"
-        />
-        
-        {/* 🎯 Y-Axis Overlay (Vertical Zoom) - Right side */}
-        <div 
-          ref={overlayRef}
-          style={{
-            position: 'absolute',
-            right: 0,
-            top: 0,
-            width: '70px',
-            height: '100%',
-            cursor: 'ns-resize',
-            pointerEvents: 'auto',
-            zIndex: 10,
-            userSelect: 'none'
-          }}
-          title="Drag or scroll to zoom vertically"
-        />
-        
-        {/* ⚙️ SETTINGS BUTTON (TradingView Style - Bottom Position) */}
-        <button
-          onClick={() => setShowSettings(!showSettings)}
-          style={{
-            position: 'absolute',
-            bottom: '1px',
-            right: '1px',
-            width: '32px',
-            height: '32px',
-            borderRadius: '4px',
-            border: '1px solid #2a2e39',
-            backgroundColor: '#1e222d',
-            color: '#9aa0af',
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            fontSize: '16px',
-            transition: 'all 0.2s ease',
-            zIndex: 20,
-            hover: { borderColor: '#2962ff', color: '#2962ff' }
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.borderColor = '#2962ff';
-            e.currentTarget.style.color = '#2962ff';
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.borderColor = '#2a2e39';
-            e.currentTarget.style.color = '#9aa0af';
-          }}
-          title="Chart Settings"
-        >
-          ⚙️
-        </button>
-        
-        {/* Settings Panel (placeholder for future features) */}
-        {showSettings && (
-          <div
-            style={{
-              position: 'absolute',
-              bottom: '40px',
-              right: '36px',
-              width: '200px',
-              backgroundColor: '#1e222d',
-              border: '1px solid #2962ff',
-              borderRadius: '4px',
-              padding: '8px 0',
-              zIndex: 30,
-              boxShadow: '0 4px 12px rgba(0, 0, 0, 0.5)'
-            }}
-          >
-            <div style={{ padding: '8px 12px', color: '#787b86', fontSize: '12px', fontWeight: 'bold', borderBottom: '1px solid #2a2e39' }}>
-              Chart Settings
-            </div>
-            <div style={{ padding: '8px 12px', color: '#9aa0af', fontSize: '13px' }}>
-              More features coming soon...
-            </div>
-          </div>
+    <div className="w-full h-full relative bg-[#131722]">
+      {/* Chart Container */}
+      <div
+        ref={chartContainerRef}
+        className="w-full h-full"
+        style={{ minHeight: '300px' }}
+      />
+
+      {/* Reset Zoom Button */}
+      <button
+        onClick={handleResetZoom}
+        className="absolute bottom-2 right-2 px-3 py-1.5 rounded text-xs font-medium transition-all duration-200 z-10"
+        style={{
+          backgroundColor: '#1e222d',
+          border: '1px solid #2a2e39',
+          color: '#9aa0af',
+        }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.borderColor = '#2962ff';
+          e.currentTarget.style.color = '#2962ff';
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.borderColor = '#2a2e39';
+          e.currentTarget.style.color = '#9aa0af';
+        }}
+        title="Reset Zoom (Double-click chart)"
+      >
+        ⟲ Reset
+      </button>
+
+      {/* Legend - TradingView style (shows only active indicators) */}
+      <div
+        className="absolute top-2 left-2 flex flex-wrap gap-3 text-xs z-10 bg-[#131722]/80 px-2 py-1 rounded"
+        style={{ color: '#9aa0af' }}
+      >
+        {processedData?.smaData && processedData.smaData.length > 0 && (
+          <span style={{ color: '#ff9800' }}>● SMA(20)</span>
         )}
-        
-        {/* ↔️ X-Axis Overlay (Horizontal Zoom) - Bottom side */}
-        <div 
-          ref={xAxisOverlayRef}
-          style={{
-            position: 'absolute',
-            left: 60,
-            right: 70,
-            bottom: 0,
-            height: '35px',
-            cursor: 'ew-resize',
-            pointerEvents: 'auto',
-            zIndex: 10,
-            userSelect: 'none'
-          }}
-          title="Drag or scroll to zoom horizontally"
-        />
+        {processedData?.emaData && processedData.emaData.length > 0 && (
+          <span style={{ color: '#2962ff' }}>● EMA(12)</span>
+        )}
+        {processedData?.bbUpperData && processedData.bbUpperData.length > 0 && (
+          <span style={{ color: 'rgba(187, 134, 252, 0.9)' }}>● Bollinger</span>
+        )}
+        {processedData?.rsiData && processedData.rsiData.length > 0 && (
+          <span style={{ color: '#fbc02d' }}>● RSI(14)</span>
+        )}
+        {processedData?.macdLineData && processedData.macdLineData.length > 0 && (
+          <span style={{ color: '#2962ff' }}>● MACD</span>
+        )}
+      </div>
+
+      {/* Tooltip instructions removed as requested */}
     </div>
-  )
+  );
 }
