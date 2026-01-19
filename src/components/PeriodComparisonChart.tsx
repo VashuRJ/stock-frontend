@@ -383,7 +383,7 @@ export default function PeriodComparisonChart({
           <div className="flex items-center gap-3">
             <ArrowLeftRight className="text-[#2962ff]" size={isFullscreen ? 16 : 20} />
             <div>
-              <h2 className={`${isFullscreen ? 'text-base' : 'text-lg'} font-bold text-white`}>Compare Time Periods (TradingView Style)</h2>
+              <h2 className={`${isFullscreen ? 'text-base' : 'text-lg'} font-bold text-white`}>Compare Time Periods</h2>
               <p className={`${isFullscreen ? 'text-[10px]' : 'text-xs'} text-[#787b86]`}>{symbol.replace('.NS', '')} • Drag anywhere to pan, wheel to zoom, axis to scale</p>
             </div>
           </div>

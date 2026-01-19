@@ -174,7 +174,7 @@ export default function EChartLine({
                     top: 0.1,
                     bottom: 0.1,
                 },
-                autoScale: false, // Disable autoScale for manual panning
+                autoScale: true, // Enable autoScale for proper Y-axis adjustment
                 mode: 0,
             },
             timeScale: {

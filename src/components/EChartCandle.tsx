@@ -306,7 +306,7 @@ export default function EChartCandle({
           top: 0.1,
           bottom: showVolume ? 0.25 : 0.1,
         },
-        autoScale: false,
+        autoScale: true,
         mode: 0, // Normal price scale mode
       },
       timeScale: {
@@ -634,7 +634,7 @@ export default function EChartCandle({
         top: 0.05,
         bottom: mainBottomMargin,
       },
-      autoScale: false,
+      autoScale: true,
     });
 
     // Apply Volume Margins (Overlay at bottom of Main Chart)
