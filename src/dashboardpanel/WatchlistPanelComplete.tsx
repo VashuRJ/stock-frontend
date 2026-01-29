@@ -1,6 +1,7 @@
 import React, { useState, useCallback } from 'react'
 import { Pencil, Trash2, ChevronDown, ChevronRight, CheckCircle2, X, Search, Plus } from 'lucide-react'
 import { api } from '@/api/client'
+import StockSparkline from '@/components/charts/StockSparkline'
 
 export interface StockData {
   symbol: string
@@ -72,7 +73,7 @@ const WatchlistPanelComplete: React.FC<WatchlistPanelCompleteProps> = ({
   const [addingToWatchlist, setAddingToWatchlist] = useState(false)
 
   // Toast for notifications
-  const [toast, setToast] = useState<{message: string, type: 'success' | 'error'} | null>(null)
+  const [toast, setToast] = useState<{ message: string, type: 'success' | 'error' } | null>(null)
 
   const showToast = (message: string, type: 'success' | 'error') => {
     setToast({ message, type })
@@ -90,7 +91,7 @@ const WatchlistPanelComplete: React.FC<WatchlistPanelCompleteProps> = ({
         const firstWatchlist = watchlists[0]
         setCurrentWatchlist(firstWatchlist)
         setExpandedWatchlistId(firstWatchlist.id)
-        
+
         // Auto-load stocks for first watchlist
         const symbols = firstWatchlist.symbol || []
         if (symbols.length > 0) {
@@ -99,7 +100,7 @@ const WatchlistPanelComplete: React.FC<WatchlistPanelCompleteProps> = ({
           setWatchlistData(wResults.filter(Boolean) as StockData[])
           setWatchlistLoading(false)
         }
-        
+
         return firstWatchlist
       }
       return null
@@ -291,18 +292,17 @@ const WatchlistPanelComplete: React.FC<WatchlistPanelCompleteProps> = ({
       {/* Toast */}
       {toast && (
         <div
-          className={`fixed top-20 left-1/2 -translate-x-1/2 z-50 px-6 py-4 rounded-xl shadow-2xl border animate-slide-in-top min-w-[300px] text-center ${
-            toast.type === 'success'
-              ? 'bg-[#089981]/20 border-[#089981] text-[#089981]'
-              : 'bg-[#f23645]/20 border-[#f23645] text-[#f23645]'
-          }`}
+          className={`fixed top-20 left-1/2 -translate-x-1/2 z-50 px-6 py-4 rounded-xl shadow-2xl border animate-slide-in-top min-w-[300px] text-center ${toast.type === 'success'
+            ? 'bg-[#089981]/20 border-[#089981] text-[#089981]'
+            : 'bg-[#f23645]/20 border-[#f23645] text-[#f23645]'
+            }`}
         >
           <p className="text-sm font-semibold">{toast.message}</p>
         </div>
       )}
 
       {/* Watchlist Panel */}
-      <div className="bg-[#0f1118] rounded-xl border border-[#1f2330] flex flex-col shadow-lg h-[320px] min-h-0 overflow-hidden">
+      <div className="bg-[#0f1118] rounded-xl border border-[#1f2330] flex flex-col shadow-lg min-h-[400px] overflow-hidden">
         <div className="p-3">
           <button
             onClick={() => setShowCreateModal(true)}
@@ -409,6 +409,12 @@ const WatchlistPanelComplete: React.FC<WatchlistPanelCompleteProps> = ({
                               </div>
                               <div className="text-[10px] text-[#787b86]">{cleanCompanyName(stock.name) || 'NSE'}</div>
                             </div>
+
+                            {/* Sparkline Chart */}
+                            <div className="mx-2 flex-shrink-0">
+                              <StockSparkline symbol={stock.symbol} changePercent={stock.changePercent} />
+                            </div>
+
                             <div className="text-right flex-shrink-0">
                               <div className="text-sm text-white font-mono">₹{stock.price.toFixed(2)}</div>
                               <div className={`text-xs ${getColor(stock.change)}`}>{stock.changePercent.toFixed(2)}%</div>
@@ -424,9 +430,9 @@ const WatchlistPanelComplete: React.FC<WatchlistPanelCompleteProps> = ({
                                     setCurrentWatchlist((prev) =>
                                       prev
                                         ? {
-                                            ...prev,
-                                            symbol: (prev.symbol || []).filter((sym) => sym !== stock.symbol),
-                                          }
+                                          ...prev,
+                                          symbol: (prev.symbol || []).filter((sym) => sym !== stock.symbol),
+                                        }
                                         : prev
                                     )
                                     showToast(

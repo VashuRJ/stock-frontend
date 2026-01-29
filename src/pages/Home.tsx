@@ -6,7 +6,7 @@ import { useNavigate } from 'react-router-dom';
 // Ye component ek fake trading interface banata hai jo real lagta hai
 const HeroChart = () => {
   const [candles, setCandles] = useState<any[]>([])
-  
+
   useEffect(() => {
     // Initial Data Generation (Fake Candles)
     const data = []
@@ -67,8 +67,8 @@ const HeroChart = () => {
       {/* Chart Area */}
       <div className="flex-1 relative p-4 flex items-end justify-between gap-1 overflow-hidden">
         {/* Grid Background */}
-        <div className="absolute inset-0 opacity-10 pointer-events-none" 
-             style={{ backgroundImage: 'linear-gradient(#2a2e39 1px, transparent 1px), linear-gradient(90deg, #2a2e39 1px, transparent 1px)', backgroundSize: '40px 40px' }}>
+        <div className="absolute inset-0 opacity-10 pointer-events-none"
+          style={{ backgroundImage: 'linear-gradient(#2a2e39 1px, transparent 1px), linear-gradient(90deg, #2a2e39 1px, transparent 1px)', backgroundSize: '40px 40px' }}>
         </div>
 
         {/* Candles Rendering */}
@@ -83,12 +83,12 @@ const HeroChart = () => {
           return (
             <div key={i} className="relative flex-1 h-full group hover:opacity-100 opacity-90 transition-all">
               {/* Wick */}
-              <div 
+              <div
                 className="absolute w-[1px] left-1/2 -translate-x-1/2"
                 style={{ height: `${wickHeightPct}%`, bottom: `${wickBottomPct}%`, backgroundColor: color }}
               ></div>
               {/* Body */}
-              <div 
+              <div
                 className="absolute w-full"
                 style={{ height: `${Math.max(heightPct, 1)}%`, bottom: `${bottomPct}%`, backgroundColor: color }}
               ></div>
@@ -116,9 +116,9 @@ export default function Home() {
   }, [])
 
   const handleRestrictedAction = (e: any) => {
-    if (e && e.stopPropagation) e.stopPropagation(); 
+    if (e && e.stopPropagation) e.stopPropagation();
     if (isLoggedIn) navigate('/dashboard')
-    else navigate('/login') 
+    else navigate('/login')
   }
 
   // --- MOCK DATA ---
@@ -154,7 +154,7 @@ export default function Home() {
       {/* 2. HERO SECTION (Main Focus) */}
       <section className="relative pt-20 pb-24 px-4 sm:px-6 lg:px-8 max-w-[1600px] mx-auto">
         <div className="grid lg:grid-cols-2 gap-16 items-center">
-          
+
           {/* LEFT: Text Content */}
           <div className="text-left space-y-8 relative z-10">
             <h1 className="text-5xl md:text-7xl font-bold text-white leading-[1.1] tracking-tight">
@@ -163,20 +163,20 @@ export default function Home() {
                 With Precision.
               </span>
             </h1>
-            
+
             <p className="text-lg text-[#787b86] max-w-xl font-light leading-relaxed">
-              Advanced charting, real-time data, and algorithmic insights—all in one place. 
+              Advanced charting, real-time data, and algorithmic insights—all in one place.
               Designed for traders who demand excellence.
             </p>
 
             <div className="flex flex-wrap gap-4 pt-4">
-              <button 
+              <button
                 onClick={handleRestrictedAction}
                 className="px-8 py-4 bg-[#2962ff] hover:bg-[#1e53e5] text-white rounded-full font-semibold text-lg transition-all shadow-[0_4px_20px_rgba(41,98,255,0.4)] hover:translate-y-[-2px]"
               >
                 {isLoggedIn ? 'Launch Dashboard' : 'Start Trading Free'}
               </button>
-              <button 
+              <button
                 onClick={() => document.getElementById('market-grid')?.scrollIntoView({ behavior: 'smooth' })}
                 className="px-8 py-4 bg-[#1e222d] hover:bg-[#2a2e39] text-white border border-[#2a2e39] rounded-full font-semibold text-lg transition-all"
               >
@@ -204,7 +204,7 @@ export default function Home() {
           <div className="relative h-[500px] w-full">
             {/* Glow Effect behind chart */}
             <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[80%] h-[80%] bg-[#2962ff] opacity-20 blur-[100px] rounded-full pointer-events-none"></div>
-            
+
             {/* Actual Chart Component */}
             <HeroChart />
 
@@ -239,7 +239,7 @@ export default function Home() {
           {/* Grid of Stocks */}
           <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
             {WATCHLIST.map((stock, i) => (
-              <div 
+              <div
                 key={i}
                 onClick={handleRestrictedAction}
                 className="bg-[#1e222d] border border-[#2a2e39] p-5 rounded-xl hover:border-[#2962ff] hover:shadow-[0_0_20px_rgba(41,98,255,0.15)] transition-all cursor-pointer group"
@@ -256,7 +256,7 @@ export default function Home() {
                   </div>
                   <button className="text-[#2962ff] opacity-0 group-hover:opacity-100 transition-opacity text-xl">+</button>
                 </div>
-                
+
                 <div className="flex items-baseline justify-between mt-2">
                   <span className="text-2xl font-mono text-white">₹{stock.p}</span>
                   <span className={`text-sm font-medium ${stock.isPos ? 'text-[#089981] bg-[#089981]/10' : 'text-[#f23645] bg-[#f23645]/10'} px-2 py-1 rounded`}>

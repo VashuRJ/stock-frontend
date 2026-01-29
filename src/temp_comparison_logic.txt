@@ -1,0 +1,48 @@
+    // Process comparison data from API
+    const comparisonData = React.useMemo(() => {
+        if (!isComparing || !comparisonApiData) {
+            return null;
+        }
+
+        console.log('🔄 Processing API comparison data:', comparisonApiData);
+
+        try {
+            const period1Data: LineData<Time>[] = [];
+            const period2Data: LineData<Time>[] = [];
+
+            // Process Period 1 data from API
+            if (comparisonApiData.period1?.data) {
+                comparisonApiData.period1.data.forEach((item: any) => {
+                    const date = new Date(item.date);
+                    const timestamp = Math.floor(date.getTime() / 1000) as Time;
+                    period1Data.push({
+                        time: timestamp,
+                        value: item.close
+                    });
+                });
+            }
+
+            // Process Period 2 data from API and map to Period 1 timeline
+            if (comparisonApiData.period2?.data && period1Data.length > 0) {
+                const p1Start = period1Data[0].time as number;
+                const p1End = period1Data[period1Data.length - 1].time as number;
+                const p1Duration = p1End - p1Start;
+
+                comparisonApiData.period2.data.forEach((item: any, index: number) => {
+                    const progress = index / (comparisonApiData.period2.data.length - 1);
+                    const mappedTime = Math.floor(p1Start + progress * p1Duration) as Time;
+                    
+                    period2Data.push({
+                        time: mappedTime,
+                        value: item.close
+                    });
+                });
+            }
+
+            console.log('✅ Processed:', { p1: period1Data.length, p2: period2Data.length });
+            return { period1Data, period2Data };
+        } catch (error) {
+            console.error('❌ Error:', error);
+            return null;
+        }
+    }, [isComparing, comparisonApiData]);

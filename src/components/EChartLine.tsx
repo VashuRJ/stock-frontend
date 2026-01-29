@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
     createChart,
     IChartApi,
@@ -24,6 +24,11 @@ interface EChartLineProps {
     data: Point[];
     showSMA?: boolean;
     showEMA?: boolean;
+}
+
+interface DateRange {
+    startDate: string;
+    endDate: string;
 }
 
 // Helper: Convert date string to timestamp
@@ -85,6 +90,7 @@ export default function EChartLine({
     const lineSeriesRef = useRef<ISeriesApi<'Area'> | null>(null);
     const smaSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
     const emaSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+
     const resizeObserverRef = useRef<ResizeObserver | null>(null);
 
     // Memoize processed data
@@ -139,6 +145,8 @@ export default function EChartLine({
         return { lineData, smaData, emaData };
     }, [data]);
 
+
+
     // Initialize chart ONCE
     useEffect(() => {
         if (!chartContainerRef.current || chartRef.current) return;
@@ -174,7 +182,7 @@ export default function EChartLine({
                     top: 0.1,
                     bottom: 0.1,
                 },
-                autoScale: true, // Enable autoScale for proper Y-axis adjustment
+                autoScale: true,
                 mode: 0,
             },
             timeScale: {
@@ -246,6 +254,8 @@ export default function EChartLine({
         });
         emaSeriesRef.current = emaSeries;
 
+
+
         // Setup resize observer
         const resizeObserver = new ResizeObserver((entries) => {
             if (entries.length === 0 || !chartContainerRef.current) return;
@@ -264,6 +274,7 @@ export default function EChartLine({
             lineSeriesRef.current = null;
             smaSeriesRef.current = null;
             emaSeriesRef.current = null;
+
         };
     }, []);
 
@@ -332,6 +343,8 @@ export default function EChartLine({
                 style={{ minHeight: '300px' }}
             />
 
+
+
             {/* Reset Zoom Button */}
             <button
                 onClick={handleResetZoom}
@@ -354,17 +367,27 @@ export default function EChartLine({
                 ⟲ Reset
             </button>
 
+
             {/* Legend */}
             <div
-                className="absolute top-2 left-2 flex flex-wrap gap-3 text-xs z-10 bg-[#131722]/80 px-2 py-1 rounded"
-                style={{ color: '#9aa0af' }}
+                className="absolute top-2 left-2 flex flex-col gap-1.5 text-xs z-10 bg-[#131722]/95 px-3 py-2 rounded-lg border border-[#2a2e39] shadow-lg"
+                style={{ maxWidth: '450px' }}
             >
-                <span style={{ color: '#2962ff' }}>● Price</span>
+                <div className="flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full" style={{ backgroundColor: '#2962ff' }}></span>
+                    <span className="text-white font-medium">Current Price</span>
+                </div>
                 {showSMA && processedData?.smaData && processedData.smaData.length > 0 && (
-                    <span style={{ color: '#ff9800' }}>● SMA(20)</span>
+                    <div className="flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full" style={{ backgroundColor: '#ff9800' }}></span>
+                        <span className="text-[#ff9800]">SMA(20)</span>
+                    </div>
                 )}
                 {showEMA && processedData?.emaData && processedData.emaData.length > 0 && (
-                    <span style={{ color: '#2196f3' }}>● EMA(12)</span>
+                    <div className="flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full" style={{ backgroundColor: '#2196f3' }}></span>
+                        <span className="text-[#2196f3]">EMA(12)</span>
+                    </div>
                 )}
             </div>
         </div>

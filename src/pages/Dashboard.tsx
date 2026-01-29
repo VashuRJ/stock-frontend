@@ -4,11 +4,14 @@ import {
 } from 'recharts'
 import EChartCandle from '@/components/EChartCandle'
 import EChartLine from '@/components/EChartLine'
-import PeriodComparisonChart from '@/components/PeriodComparisonChart'
+import SmartPeriodCompare from '@/components/SmartPeriodCompare'
+import StockSparkline from '@/components/charts/StockSparkline'
+import TopMoversPanel from '@/components/dashboard/TopMoversPanel'
+import StockInsightsModal from '@/components/StockInsightsModal'
 
 import {
   Search, Bell, User, Plus, Activity, TrendingUp, TrendingDown, LogOut, X, Check,
-  ChevronRight, ChevronDown, Pencil, Trash2, CheckCircle2, ArrowLeftRight
+  ChevronRight, ChevronDown, Pencil, Trash2, CheckCircle2, ArrowLeftRight, Info
 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '@/api/client'
@@ -125,6 +128,7 @@ export default function Dashboard() {
   const [isFullscreen, setIsFullscreen] = useState(false) // NEW: Fullscreen mode
   const [showComparisonModal, setShowComparisonModal] = useState(false) // Period Comparison
 
+
   // Search State
   const [searchQuery, setSearchQuery] = useState('')
   const [searchSuggestions, setSearchSuggestions] = useState<string[]>([])
@@ -143,7 +147,7 @@ export default function Dashboard() {
   const [allStockSymbols, setAllStockSymbols] = useState<string[]>([])
   const [indicesSymbols, setIndicesSymbols] = useState<string[]>([])
   const [indicesListNames, setIndicesListNames] = useState<string[]>([])
-  const [selectedIndexForMovers, setSelectedIndexForMovers] = useState<string | null>(null)
+  const [selectedIndexForMovers, setSelectedIndexForMovers] = useState<string>('BANKNIFTY')
   const [loadingMovers, setLoadingMovers] = useState(false)
 
   // Watchlist modal state (for Popular Stocks add-to-watchlist)
@@ -154,6 +158,10 @@ export default function Dashboard() {
   const [newWatchlistName, setNewWatchlistName] = useState('')
   const [loadingWatchlists, setLoadingWatchlists] = useState(false)
   const [savingWatchlist, setSavingWatchlist] = useState(false)
+
+  // Insights modal state
+  const [insightsModalOpen, setInsightsModalOpen] = useState(false)
+  const [insightsSymbol, setInsightsSymbol] = useState<string | null>(null)
 
   // 🔹 Timeframe change handler (IMPORTANT)
   const handleTimeframeChange = (tf: string) => {
@@ -170,9 +178,6 @@ export default function Dashboard() {
       case '1D':
         start.setDate(today.getDate() - 1)
         break
-      case '1W':
-        start.setDate(today.getDate() - 7)
-        break
       case '1M':
         start.setMonth(today.getMonth() - 1)
         break
@@ -184,6 +189,9 @@ export default function Dashboard() {
         break
       case '1Y':
         start.setFullYear(today.getFullYear() - 1)
+        break
+      case '5Y':
+        start.setFullYear(today.getFullYear() - 5)
         break
       default:
         start.setMonth(today.getMonth() - 1)
@@ -540,7 +548,7 @@ export default function Dashboard() {
 
       // map timeframe -> days (reuse same mapping as historical fetch)
       const daysByInterval: Record<string, number> = {
-        '1D': 0, '1W': 14, '1M': 30, '3M': 90, '6M': 180, '1Y': 365
+        '1D': 0, '1M': 30, '3M': 90, '6M': 180, '1Y': 365, '5Y': 1825
       }
       const days = daysByInterval[interval] ?? 365
 
@@ -866,11 +874,11 @@ export default function Dashboard() {
       // Map UI timeframe to number of days the backend should return (for DAILY candles only)
       const daysByInterval: Record<string, number> = {
         '1D': 0,   // Special case: 0 means use intraday endpoint (handled above)
-        '1W': 14,  // ~2 weeks of daily data
         '1M': 30,  // ~1 month of daily data
         '3M': 90,  // ~3 months of daily data
         '6M': 180, // ~6 months of daily data
         '1Y': 365, // 1 year of daily data
+        '5Y': 1825, // 5 years of daily data
       }
 
       const days = daysByInterval[interval] ?? 365
@@ -1160,22 +1168,29 @@ export default function Dashboard() {
     return () => clearInterval(interval)
   }, [indicesSymbols])
 
-  // Load Popular Stocks, Gainers & Losers on Mount
+  // Load Popular Stocks with Live Updates
   useEffect(() => {
-    const load = async () => {
+    const loadPopularLive = async () => {
       try {
         const popRes = await api.get('/stocks/popular', { params: { limit: 40 } })
         const popularSymbols = popRes.data.map((s: any) => s.symbol)
         const pResults = await Promise.all(popularSymbols.map((s: string) => fetchStock(s)))
         const popularStocks = pResults.filter(Boolean) as StockData[]
         setPopularData(popularStocks)
-
-        // Top movers will be loaded by the dedicated effect when `selectedIndexForMovers` is ready.
       } catch (err) {
         console.error('Failed to load popular stocks:', err)
       }
     }
-    load()
+
+    // Initial load
+    loadPopularLive()
+
+    // Auto-refresh every 5 seconds during market hours
+    if (isMarketOpen()) {
+      console.log('🔄 Auto-refresh enabled for popular stocks (market is open)')
+      const interval = setInterval(loadPopularLive, 5000)
+      return () => clearInterval(interval)
+    }
   }, [])
 
   // Load top movers for selected index when changed
@@ -1239,7 +1254,7 @@ export default function Dashboard() {
         )}
 
         {/* MAIN CONTENT GRID */}
-        <div className="flex-1 overflow-y-auto p-4 grid grid-cols-12 gap-4">
+        <div className="flex-1 overflow-y-auto p-4 grid grid-cols-12 gap-4 items-start">
 
           {/* ================= LEFT COLUMN: INDICES (Fixed Names) ================= */}
           <div className="col-span-12 lg:col-span-3 flex flex-col gap-4 min-h-0">
@@ -1378,7 +1393,7 @@ export default function Dashboard() {
               <div className="flex gap-2 mb-3 flex-wrap">
                 {/* Timeframe Selector */}
                 <div className="flex gap-1 bg-[#1e222d] rounded p-1">
-                  {['1D', '1W', '1M', '3M', '6M', '1Y'].map(tf => (
+                  {['1D', '1M', '3M', '6M', '1Y', '5Y'].map(tf => (
                     <button
                       key={tf}
                       onClick={() => handleTimeframeChange(tf)}
@@ -1447,6 +1462,8 @@ export default function Dashboard() {
                   <ArrowLeftRight size={12} />
                   COMPARE
                 </button>
+
+
               </div>
 
               <div className="w-full min-h-0 flex-1 flex flex-col">
@@ -1490,86 +1507,21 @@ export default function Dashboard() {
               )}
             </div>
 
-            {/* Movers Section - REAL DATA */}
-            <div className="flex items-center justify-between gap-3 mb-2">
-              <div className="flex items-center gap-1">
-                <label className="text-xs text-[#787b86]">Index:</label>
-                <select
-                  value={selectedIndexForMovers}
-                  onChange={(e) => setSelectedIndexForMovers(e.target.value)}
-                  className="bg-[#1e222d] border border-[#2a2e39] px-1 py-1 rounded text-sm text-white ml-0"
-                >
-                  {(indicesListNames.length ? indicesListNames : ['NIFTY50', 'BANKNIFTY', 'SENSEX']).map((nm) => (
-                    <option key={nm} value={nm}>{nm}</option>
-                  ))}
-                </select>
-                {loadingMovers && <span className="text-xs text-[#787b86] ml-2">Loading...</span>}
-              </div>
-              <div className="text-xs text-[#787b86]">{isMarketOpen() ? 'Top 5 movers' : 'Market Closed — showing last close movers'}</div>
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              {/* Gainers */}
-              <div className="bg-[#131722] rounded-xl border border-[#2a2e39] overflow-hidden flex flex-col">
-                <div className="p-3 border-b border-[#2a2e39] bg-[#1e222d] flex items-center gap-2">
-                  <TrendingUp size={16} className="text-[#089981]" />
-                  <h3 className="font-bold text-white text-xs uppercase">Top Gainers</h3>
-                </div>
-                <div className="p-2 overflow-y-auto flex-1">
-                  {loadingMovers ? (
-                    <div className="flex items-center justify-center h-full text-xs text-[#787b86]">Loading...</div>
-                  ) : gainers.length === 0 ? (
-                    <div className="flex items-center justify-center h-full text-xs text-[#787b86]">No movers</div>
-                  ) : (
-                    gainers.map((s, i) => (
-                      <div
-                        key={s.symbol || `g-${i}`}
-                        onClick={() => setSelectedSymbol(s.symbol)}
-                        className="flex justify-between items-center p-2 mb-1 hover:bg-[#2a2e39] rounded cursor-pointer text-sm"
-                      >
-                        <div>
-                          <span className="text-white font-medium block">{(s.symbol || '').replace('.NS', '')}</span>
-                          <span className="text-[10px] text-[#787b86]">{formatPrice(s.price)}</span>
-                        </div>
-                        <span className="text-[#089981] font-bold">{formatPercent(s.changePercent)}</span>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
-
-              {/* Losers */}
-              <div className="bg-[#131722] rounded-xl border border-[#2a2e39] overflow-hidden flex flex-col">
-                <div className="p-3 border-b border-[#2a2e39] bg-[#1e222d] flex items-center gap-2">
-                  <TrendingDown size={16} className="text-[#f23645]" />
-                  <h3 className="font-bold text-white text-xs uppercase">Top Losers</h3>
-                </div>
-                <div className="p-2 overflow-y-auto flex-1">
-                  {loadingMovers ? (
-                    <div className="flex items-center justify-center h-full text-xs text-[#787b86]">Loading...</div>
-                  ) : losers.length === 0 ? (
-                    <div className="flex items-center justify-center h-full text-xs text-[#787b86]">No movers</div>
-                  ) : (
-                    losers.map((s, i) => (
-                      <div
-                        key={s.symbol || `l-${i}`}
-                        onClick={() => setSelectedSymbol(s.symbol)}
-                        className="flex justify-between items-center p-2 mb-1 hover:bg-[#2a2e39] rounded cursor-pointer text-sm"
-                      >
-                        <div>
-                          <span className="text-white font-medium block">{(s.symbol || '').replace('.NS', '')}</span>
-                          <span className="text-[10px] text-[#787b86]">{formatPrice(s.price)}</span>
-                        </div>
-                        <span className="text-[#f23645] font-bold">{formatPercent(s.changePercent)}</span>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
-            </div>
+            {/* Movers Section Component */}
+            <TopMoversPanel
+              gainers={gainers}
+              losers={losers}
+              loading={loadingMovers}
+              selectedIndex={selectedIndexForMovers}
+              onIndexChange={setSelectedIndexForMovers}
+              onStockSelect={setSelectedSymbol}
+              indicesList={indicesListNames.length ? indicesListNames : ['NIFTY50', 'BANKNIFTY', 'SENSEX']}
+              isMarketOpen={isMarketOpen()}
+            />
           </div>
 
           {/* ================= RIGHT COLUMN: WATCHLIST & POPULAR ================= */}
-          <div className="col-span-12 lg:col-span-3 flex flex-col gap-4">
+          <div className="col-span-12 lg:col-span-3 flex flex-col gap-4 lg:sticky lg:top-0 lg:h-[calc(100vh-120px)]">
             <WatchlistPanelComplete
               selectedSymbol={selectedSymbol}
               onSelectSymbol={setSelectedSymbol}
@@ -1580,40 +1532,56 @@ export default function Dashboard() {
             />
 
             {/* Popular Stocks */}
-            <div className="bg-[#131722] rounded-xl border border-[#2a2e39] flex flex-col shadow-lg flex-1 min-h-0 overflow-hidden">
+            <div className="bg-[#131722] rounded-xl border border-[#2a2e39] flex flex-col shadow-lg flex-1 min-h-[610px] overflow-hidden">
               <div className="p-4 border-b border-[#2a2e39] bg-[#1e222d] flex items-center justify-between">
                 <h3 className="font-bold text-white text-sm flex items-center gap-2"><Activity size={16} /> Popular Stocks</h3>
                 <span className="text-[10px] text-[#787b86]">{popularData.length} items</span>
               </div>
-              <div className="overflow-y-auto p-2 flex-1 max-h-[28rem]">
+              <div className="overflow-y-auto p-2 flex-1 scrollbar-thin scrollbar-thumb-[#2a2e39] scrollbar-track-transparent">
                 {popularData.map((stock, i) => (
-                  <div key={i} className="flex justify-between items-center p-3 mb-1 hover:bg-[#2a2e39] rounded transition-colors group">
-                    <div onClick={() => setSelectedSymbol(stock.symbol)} className="flex-1 cursor-pointer flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#2962ff] to-[#1e53e5] flex items-center justify-center text-xs font-bold text-white shadow-md group-hover:scale-110 transition-transform">
+                  <div
+                    key={i}
+                    onClick={() => setSelectedSymbol(stock.symbol)}
+                    className="flex justify-between items-center p-3 mb-1 hover:bg-[#2a2e39] rounded transition-colors group cursor-pointer"
+                  >
+                    <div className="flex-1 flex items-start gap-3">
+                      <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#2962ff] to-[#1e53e5] flex items-center justify-center text-xs font-bold text-white shadow-md group-hover:scale-110 transition-transform flex-shrink-0">
                         {stock.symbol.substring(0, 2)}
                       </div>
-                      <div>
-                        <div className="text-sm font-bold text-white group-hover:text-[#2962ff]">{stock.symbol.replace('.NS', '')}</div>
-                        <div className="text-[10px] text-[#787b86]">
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-bold text-white group-hover:text-[#2962ff] truncate">{stock.symbol.replace('.NS', '')}</div>
+                        <div className="text-[10px] text-[#787b86] truncate">
                           {stock.sector || stock.industry || formatMarketCap(stock.marketCap) || 'NSE'}
                         </div>
                       </div>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <div className={`text-xs font-medium ${getColor(stock.change)}`}>
+
+                    {/* Mini Chart */}
+                    <div className="mx-2 flex-shrink-0">
+                      <StockSparkline symbol={stock.symbol} changePercent={stock.changePercent} />
+                    </div>
+
+                    {/* Price and Change */}
+                    <div className="flex flex-col items-end gap-1 min-w-[80px]">
+                      <div className="text-xs font-semibold text-white">
+                        {formatPrice(stock.price)}
+                      </div>
+                      <div className={`text-[10px] font-medium ${getColor(stock.change)}`}>
                         {stock.change > 0 ? '+' : ''}{stock.changePercent.toFixed(2)}%
                       </div>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          openWatchlistModal(stock.symbol)
-                        }}
-                        className="opacity-0 group-hover:opacity-100 transition-opacity bg-[#2962ff] hover:bg-[#1e53e5] text-white p-1.5 rounded-md"
-                        title="Add to watchlist"
-                      >
-                        <Plus size={14} />
-                      </button>
                     </div>
+
+                    {/* Add to Watchlist Button */}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        openWatchlistModal(stock.symbol)
+                      }}
+                      className="opacity-0 group-hover:opacity-100 transition-opacity bg-[#2962ff] hover:bg-[#1e53e5] text-white p-1.5 rounded-md ml-2 flex-shrink-0"
+                      title="Add to watchlist"
+                    >
+                      <Plus size={14} />
+                    </button>
                   </div>
                 ))}
                 {popularData.length === 0 && (
@@ -1779,12 +1747,22 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Period Comparison Modal */}
+      {/* Period Comparison Modal - Smart Version */}
       {showComparisonModal && (
-        <PeriodComparisonChart
+        <SmartPeriodCompare
           symbol={selectedSymbol}
-          currentPeriod={getCurrentPeriodDates()}
           onClose={() => setShowComparisonModal(false)}
+        />
+      )}
+
+      {/* Stock Insights Modal */}
+      {insightsModalOpen && insightsSymbol && (
+        <StockInsightsModal
+          symbol={insightsSymbol}
+          onClose={() => {
+            setInsightsModalOpen(false)
+            setInsightsSymbol(null)
+          }}
         />
       )}
     </>
