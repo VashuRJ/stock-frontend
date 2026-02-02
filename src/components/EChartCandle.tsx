@@ -157,7 +157,15 @@ export default function EChartCandle({
   const resizeObserverRef = useRef<ResizeObserver | null>(null);
   const isChartInitialized = useRef<boolean>(false);
   const prevDataLength = useRef<number>(0);
-
+  interface LegendValues {
+    open: string;
+    high: string;
+    low: string;
+    close: string;
+    volume?: string;
+    color: string;
+  }
+  const [legendValues, setLegendValues] = React.useState<LegendValues | null>(null);
 
   // Memoize processed data
   const processedData = React.useMemo(() => {
@@ -214,8 +222,8 @@ export default function EChartCandle({
           time: candle.time,
           value: item.volume,
           color: candle.close >= candle.open
-            ? 'rgba(38, 166, 154, 0.5)'
-            : 'rgba(239, 83, 80, 0.5)',
+            ? 'rgba(8, 153, 129, 0.5)' // Matches upColor #089981
+            : 'rgba(242, 54, 69, 0.5)', // Matches downColor #f23645
         });
       }
 
@@ -521,11 +529,64 @@ export default function EChartCandle({
     resizeObserver.observe(chartContainerRef.current);
     resizeObserverRef.current = resizeObserver;
 
+    // --- Crosshair Move Handler (Dynamic Legend) ---
+    const updateLegend = (param: any) => {
+      const candleSeries = candleSeriesRef.current;
+      const volumeSeries = volumeSeriesRef.current;
+
+      let dataPoint: any = null;
+      let volumePoint: any = null;
+
+      // 1. Try to get data at Crosshair
+      if (param.time && candleSeries) {
+        dataPoint = param.seriesData.get(candleSeries);
+        if (volumeSeries) {
+          volumePoint = param.seriesData.get(volumeSeries);
+        }
+      }
+
+      // 2. Fallback: Get last available data point
+      // (We can't easily access the "last" point directly from the series object in v4/v5 without keeping track of accessable data.
+      // However, we have 'processedData' in the parent scope, but this Effect has no dependency on it.
+      // Instead, we will rely on the fact that 'param.time' is undefined when mouse leaves)
+
+      // Actually, relying on state update from parent is safer for "Last Value".
+      // But typically we want the chart to default to the last candle.
+    };
+
+    chart.subscribeCrosshairMove((param) => {
+      if (!candleSeriesRef.current) return;
+
+      // Get candle data
+      const candleData = param.seriesData.get(candleSeriesRef.current) as CandlestickData<Time>;
+      // Get volume data
+      const volumeData = showVolume && volumeSeriesRef.current
+        ? param.seriesData.get(volumeSeriesRef.current) as HistogramData<Time>
+        : undefined;
+
+      if (candleData) {
+        setLegendValues({
+          open: Number(candleData.open).toFixed(2),
+          high: Number(candleData.high).toFixed(2),
+          low: Number(candleData.low).toFixed(2),
+          close: Number(candleData.close).toFixed(2),
+          volume: volumeData?.value ? (Number(volumeData.value) / 1000).toFixed(1) + 'K' : undefined,
+          color: candleData.close >= candleData.open ? '#089981' : '#f23645'
+        });
+      } else {
+        // Mouse left the chart - we want to show the LAST candle.
+        // We can trigger an event or check a ref, but standard Lightweight Charts don't expose 
+        // "getLastData" easily on the series object synchronously here. 
+        // We'll reset to null (or we could store 'lastCandle' to a ref in the Data Effect).
+        setLegendValues(null);
+      }
+    });
 
 
     // Cleanup
     return () => {
       resizeObserver.disconnect();
+      // chart.unsubscribeCrosshairMove... (handled by remove)
 
       chart.remove();
       chartRef.current = null;
@@ -544,7 +605,14 @@ export default function EChartCandle({
       macdHistRef.current = null;
       isChartInitialized.current = false;
     };
-  }, []); // Initialize chart ONLY ONCE - no dependencies
+  }, [showVolume]); // Added showVolume dependency to re-bind if needed, OR keep empty and use refs. 
+  // Actually, 'showVolume' dependency here might cause re-creation of chart which is heavy. 
+  // Better to use ref for showVolume if needed inside the callback, or just check the series existence (which we do). 
+  // We'll keep the dependency array EMPTY [] as intended for init, but we need 'showVolume' for the initial check?
+  // No, the crosshair logic checks 'volumeSeriesRef.current' which is stable. 
+
+  // Re-adding the missing ref definition that was cut:
+
 
   // 🔄 Consolidated Layout & Data Update Effect
   useEffect(() => {
@@ -572,6 +640,23 @@ export default function EChartCandle({
     if (macdLineRef.current) macdLineRef.current.setData(processedData.macdLineData);
     if (macdSignalRef.current) macdSignalRef.current.setData(processedData.macdSignalData);
     if (macdHistRef.current) macdHistRef.current.setData(processedData.macdHistData);
+
+    // Update Legend with LAST data point initially (so it's not empty)
+    if (processedData.candleData.length > 0) {
+      const lastCandle = processedData.candleData[processedData.candleData.length - 1];
+      const lastVol = processedData.volumeData.length > 0 ? processedData.volumeData[processedData.volumeData.length - 1] : undefined;
+
+      setLegendValues({
+        open: Number(lastCandle.open).toFixed(2),
+        high: Number(lastCandle.high).toFixed(2),
+        low: Number(lastCandle.low).toFixed(2),
+        close: Number(lastCandle.close).toFixed(2),
+        volume: lastVol?.value ? (Number(lastVol.value) / 1000).toFixed(1) + 'K' : undefined,
+        color: lastCandle.close >= lastCandle.open ? '#089981' : '#f23645'
+      });
+    } else {
+      setLegendValues(null);
+    }
 
     // 3. 📐 CALCULATE LAYOUT MARGINS
     // Precise calculations to strictly prevent overlap
@@ -623,9 +708,26 @@ export default function EChartCandle({
       currentBottom += INDICATOR_HEIGHT + PANE_PADDING; // Move up
     }
 
+    // --- Volume Pane (Separated) ---
+    // Calculate Volume margins BEFORE Main Chart so it pushes the chart up
+    let volumeResultMargins = { top: 0, bottom: 0 };
+    const VOLUME_HEIGHT = 0.15; // 15% Fixed Height
+
+    if (showVolume) {
+      const volBottom = currentBottom;
+      const volTop = 1.0 - (volBottom + VOLUME_HEIGHT);
+
+      volumeResultMargins = {
+        top: volTop,
+        bottom: volBottom
+      };
+
+      // Increase bottom margin for Main Chart so it sits ABOVE volume
+      currentBottom += VOLUME_HEIGHT;
+    }
+
     // --- Main Chart ---
     // The rest of the space is for Main Chart
-    // Main Bottom Margin = currentBottom
     const mainBottomMargin = currentBottom;
 
     // Apply Main Chart Margins
@@ -637,18 +739,15 @@ export default function EChartCandle({
       autoScale: true,
     });
 
-    // Apply Volume Margins (Overlay at bottom of Main Chart)
-    // Volume takes bottom 15% of the MAIN CHART AREA (not screen) 
-    // Wait, simpler: Volume takes 15% screen height, sitting just above the mainBottomMargin.
-    const VOLUME_HEIGHT = 0.15;
-    const volumeTopMargin = 1.0 - (mainBottomMargin + VOLUME_HEIGHT);
+    // Ensure volume SERIES visibility is updated, not just the scale
+    if (volumeSeriesRef.current) {
+      volumeSeriesRef.current.applyOptions({ visible: showVolume });
+    }
 
+    // Apply Volume Margins
     chart.priceScale('volume').applyOptions({
       visible: showVolume,
-      scaleMargins: {
-        top: volumeTopMargin,
-        bottom: mainBottomMargin,
-      },
+      scaleMargins: volumeResultMargins,
     });
 
     // Apply RSI Margins
@@ -726,26 +825,55 @@ export default function EChartCandle({
         ⟲ Reset
       </button>
 
-      {/* Legend - TradingView style (shows only active indicators) */}
+      {/* Legend - TradingView style */}
       <div
-        className="absolute top-2 left-2 flex flex-wrap gap-3 text-xs z-10 bg-[#131722]/80 px-2 py-1 rounded"
-        style={{ color: '#9aa0af' }}
+        className="absolute top-2 left-2 flex flex-col gap-1 text-xs z-10 pointer-events-none"
       >
-        {processedData?.smaData && processedData.smaData.length > 0 && (
-          <span style={{ color: '#ff9800' }}>● SMA(20)</span>
+        {/* Row 1: OHLC Values (Dynamic) */}
+        {legendValues && (
+          <div className="flex gap-3 font-mono font-medium text-sm md:text-base bg-[#131722]/50 backdrop-blur-sm px-2 py-0.5 rounded shadow-sm">
+            <span className={legendValues.color === '#089981' ? 'text-[#089981]' : 'text-[#f23645]'}>
+              {/* Calculate percent change if needed, otherwise just show OHLC */}
+              <span className="text-gray-500 mr-1">O</span>{legendValues.open}
+            </span>
+            <span className={legendValues.color === '#089981' ? 'text-[#089981]' : 'text-[#f23645]'}>
+              <span className="text-gray-500 mr-1">H</span>{legendValues.high}
+            </span>
+            <span className={legendValues.color === '#089981' ? 'text-[#089981]' : 'text-[#f23645]'}>
+              <span className="text-gray-500 mr-1">L</span>{legendValues.low}
+            </span>
+            <span className={legendValues.color === '#089981' ? 'text-[#089981]' : 'text-[#f23645]'}>
+              <span className="text-gray-500 mr-1">C</span>{legendValues.close}
+            </span>
+            {legendValues.volume && (
+              <span className="text-gray-400">
+                <span className="text-gray-500 mr-1">Vol</span>{legendValues.volume}
+              </span>
+            )}
+          </div>
         )}
-        {processedData?.emaData && processedData.emaData.length > 0 && (
-          <span style={{ color: '#2962ff' }}>● EMA(12)</span>
-        )}
-        {processedData?.bbUpperData && processedData.bbUpperData.length > 0 && (
-          <span style={{ color: 'rgba(187, 134, 252, 0.9)' }}>● Bollinger</span>
-        )}
-        {processedData?.rsiData && processedData.rsiData.length > 0 && (
-          <span style={{ color: '#fbc02d' }}>● RSI(14)</span>
-        )}
-        {processedData?.macdLineData && processedData.macdLineData.length > 0 && (
-          <span style={{ color: '#2962ff' }}>● MACD</span>
-        )}
+
+        {/* Row 2: Active Indicators */}
+        <div className="flex flex-wrap gap-3 text-[10px] md:text-xs">
+          {showVolume && processedData?.volumeData && processedData.volumeData.length > 0 && (
+            <span style={{ color: '#26a69a' }}>● Vol</span>
+          )}
+          {processedData?.smaData && processedData.smaData.length > 0 && (
+            <span style={{ color: '#ff9800' }}>● SMA(20)</span>
+          )}
+          {processedData?.emaData && processedData.emaData.length > 0 && (
+            <span style={{ color: '#2962ff' }}>● EMA(12)</span>
+          )}
+          {processedData?.bbUpperData && processedData.bbUpperData.length > 0 && (
+            <span style={{ color: 'rgba(187, 134, 252, 0.9)' }}>● Bollinger</span>
+          )}
+          {processedData?.rsiData && processedData.rsiData.length > 0 && (
+            <span style={{ color: '#fbc02d' }}>● RSI(14)</span>
+          )}
+          {processedData?.macdLineData && processedData.macdLineData.length > 0 && (
+            <span style={{ color: '#2962ff' }}>● MACD</span>
+          )}
+        </div>
       </div>
 
       {/* Tooltip instructions removed as requested */}

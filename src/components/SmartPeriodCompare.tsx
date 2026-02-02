@@ -8,10 +8,11 @@ import {
     Time,
     CrosshairMode
 } from 'lightweight-charts'
+import html2canvas from 'html2canvas'
 import {
     X, Calendar, TrendingUp, BarChart3, ArrowLeftRight,
     Loader2, Maximize2, Minimize2, Clock, CalendarDays,
-    ChevronRight, Info, Zap, RotateCcw
+    ChevronRight, Info, Zap, RotateCcw, CheckSquare, Square, Camera
 } from 'lucide-react'
 import {
     comparePeriods,
@@ -19,6 +20,11 @@ import {
     PeriodCompareRequest,
     PeriodData
 } from '@/api/client'
+import CalendarPopup, {
+    formatDateForAPI,
+    formatDateForDisplay as formatDDMMYYYY,
+    handleInputMask
+} from './CalendarPopup'
 
 interface SmartPeriodCompareProps {
     symbol: string
@@ -63,6 +69,18 @@ const formatDateDisplay = (dateStr: string): string => {
 // Get today's date string for max date validation
 const getTodayString = (): string => {
     return formatDateForInput(new Date())
+}
+
+// Calculate start date going back from today for N days
+const getRecentPeriodStart = (days: number): string => {
+    const today = new Date()
+    // Calculate start date: today - days + 1 (to make end date inclusive of today)
+    // Actually, usually data goes up to 'yesterday' close if today is active, but let's assume 'today' is the anchor.
+    // If market isn't closed, we might get partial data for today.
+    // Logic: Start = End - Duration + 1
+    const start = new Date(today)
+    start.setDate(today.getDate() - days + 1)
+    return formatDateForInput(start)
 }
 
 // Calculate end date based on start date and duration (respects today's date)
@@ -129,20 +147,51 @@ export default function SmartPeriodCompare({ symbol, onClose }: SmartPeriodCompa
     const [step, setStep] = useState<1 | 2>(1) // Step 1: Duration, Step 2: Dates
     const [selectedDuration, setSelectedDuration] = useState<number>(30) // Default 1 month
     const [customDays, setCustomDays] = useState<string>('')
+    const [isAutoDate1, setIsAutoDate1] = useState(true)
 
     // Date states
     const [date1, setDate1] = useState<string>(() => {
-        // Default: 1 month ago
-        const d = new Date()
-        d.setMonth(d.getMonth() - 2)
-        return formatDateForInput(d)
+        // Default: Current period (last 30 days ending today)
+        return getRecentPeriodStart(30)
     })
-    const [date2, setDate2] = useState<string>(() => {
-        // Default: 1 month ago from today
-        const d = new Date()
-        d.setMonth(d.getMonth() - 1)
-        return formatDateForInput(d)
-    })
+    const [date2, setDate2] = useState<string>('')
+
+    // Calendar & Input States
+    const [showCal1, setShowCal1] = useState(false)
+    const [showCal2, setShowCal2] = useState(false)
+    const [date1Input, setDate1Input] = useState('')
+    const [date2Input, setDate2Input] = useState('')
+
+    // Sync inputs with state (handles initialization + calendar selection)
+    useEffect(() => {
+        if (date1) setDate1Input(formatDDMMYYYY(date1))
+    }, [date1])
+
+    useEffect(() => {
+        if (date2) setDate2Input(formatDDMMYYYY(date2))
+    }, [date2])
+
+
+
+    // Input handlers
+    const handleDate1InputChange = (val: string) => {
+        setDate1Input(val)
+        if (val.length === 10) setDate1(formatDateForAPI(val))
+        else if (val === '') setDate1('')
+    }
+
+    const handleDate2InputChange = (val: string) => {
+        setDate2Input(val)
+        if (val.length === 10) setDate2(formatDateForAPI(val))
+        else if (val === '') setDate2('')
+    }
+
+    // Handle Enter Key
+    const handleKeyDown = (e: React.KeyboardEvent) => {
+        if (e.key === 'Enter') {
+            handleCompare()
+        }
+    }
 
     // Comparison states
     const [loading, setLoading] = useState(false)
@@ -153,6 +202,7 @@ export default function SmartPeriodCompare({ symbol, onClose }: SmartPeriodCompa
 
     // Chart refs
     const chartContainerRef = useRef<HTMLDivElement>(null)
+    const reportContainerRef = useRef<HTMLDivElement>(null) // Ref for full report snapshot
     const chartRef = useRef<IChartApi | null>(null)
     const period1SeriesRef = useRef<ISeriesApi<'Line'> | null>(null)
     const period2SeriesRef = useRef<ISeriesApi<'Line'> | null>(null)
@@ -172,10 +222,47 @@ export default function SmartPeriodCompare({ symbol, onClose }: SmartPeriodCompa
         return calculateEndDate(date2, activeDays)
     }, [date2, activeDays])
 
+    // Calculate Correlation (Pattern Match)
+    const patternCorrelation = useMemo(() => {
+        if (!comparisonData?.period1?.data || !comparisonData?.period2?.data) return 0
+
+        // Get array of percent changes or normalized prices
+        // Filter to common length
+        const len = Math.min(comparisonData.period1.data.length, comparisonData.period2.data.length)
+        if (len < 5) return 0 // Need decent sample size
+
+        const arr1 = comparisonData.period1.data.slice(0, len).map(d => d.change_pct || 0)
+        const arr2 = comparisonData.period2.data.slice(0, len).map(d => d.change_pct || 0)
+
+        // Standard Pearson Correlation Formula
+        const n = len
+        let sum1 = 0, sum2 = 0, sum1Sq = 0, sum2Sq = 0, pSum = 0
+
+        for (let i = 0; i < n; i++) {
+            sum1 += arr1[i]
+            sum2 += arr2[i]
+            sum1Sq += arr1[i] ** 2
+            sum2Sq += arr2[i] ** 2
+            pSum += arr1[i] * arr2[i]
+        }
+
+        const num = pSum - (sum1 * sum2 / n)
+        const den = Math.sqrt((sum1Sq - sum1 ** 2 / n) * (sum2Sq - sum2 ** 2 / n))
+
+        if (den === 0) return 0
+
+        const corr = num / den // Range -1 to 1
+        return Math.round(corr * 100) // Convert to percentage (-100 to 100)
+    }, [comparisonData])
+
     // ===== HANDLERS =====
     const handleDurationSelect = (days: number) => {
         setSelectedDuration(days)
         setCustomDays('')
+        // Auto-update Date Range A if in auto mode
+        if (isAutoDate1) {
+            setDate1(getRecentPeriodStart(days))
+        }
     }
 
     const handleCustomDaysChange = (value: string) => {
@@ -185,13 +272,83 @@ export default function SmartPeriodCompare({ symbol, onClose }: SmartPeriodCompa
             setCustomDays(value)
             if (numValue >= 1) {
                 setSelectedDuration(0)
+                // Auto-update Date Range A if in auto mode
+                if (isAutoDate1) {
+                    setDate1(getRecentPeriodStart(numValue))
+                }
             }
         } else if (numValue > MAX_DAYS) {
             // Auto-correct to max
             setCustomDays(MAX_DAYS.toString())
             setSelectedDuration(0)
+            if (isAutoDate1) {
+                setDate1(getRecentPeriodStart(MAX_DAYS))
+            }
         }
     }
+
+    // Quick Set Handlers for Reference Period
+    const handleSetPreviousPeriod = () => {
+        if (!date1) return
+        const d1 = new Date(date1)
+        const d2 = new Date(d1)
+        d2.setDate(d1.getDate() - activeDays)
+        setDate2(formatDateForInput(d2))
+    }
+
+    const handleSetLastYearPeriod = () => {
+        if (!date1) return
+        const d1 = new Date(date1)
+        const d2 = new Date(d1)
+        d2.setFullYear(d1.getFullYear() - 1)
+        setDate2(formatDateForInput(d2))
+    }
+
+    const handleDownloadSnapshot = async () => {
+        if (!reportContainerRef.current) return
+
+        try {
+            // Capture the full report container (Header + Legend + Chart + Summary)
+            const canvas = await html2canvas(reportContainerRef.current, {
+                backgroundColor: '#0d1117' as any,
+                scale: 2, // 2x resolution
+                useCORS: true,
+                logging: false,
+                ignoreElements: (element: Element) => {
+                    // Ignore the camera/reset buttons in the screenshot to make it look cleaner
+                    const el = element as HTMLElement
+                    return el.tagName === 'BUTTON' && el.innerText !== '% Change' && el.innerText !== 'Price (₹)'
+                }
+            })
+
+            const link = document.createElement('a')
+            link.download = `${symbol}_comparison_report_${date1}_vs_${date2}.png`
+            link.href = canvas.toDataURL('image/png')
+            document.body.appendChild(link)
+            link.click()
+            document.body.removeChild(link)
+        } catch (err) {
+            console.error("Snapshot failed:", err)
+        }
+    }
+
+    // Keyboard shortcut for snapshot (allows capturing tooltip while hovering)
+    useEffect(() => {
+        const handleGlobalKeyDown = (e: KeyboardEvent) => {
+            // Trigger on 's' key only when in Chart View (Step 2)
+            if (e.key.toLowerCase() === 's' && step === 2 && !e.repeat) {
+                // Prevent if typing in an input
+                const target = e.target as HTMLElement
+                if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return
+
+                e.preventDefault()
+                handleDownloadSnapshot()
+            }
+        }
+
+        window.addEventListener('keydown', handleGlobalKeyDown)
+        return () => window.removeEventListener('keydown', handleGlobalKeyDown)
+    }, [step, handleDownloadSnapshot]) // Re-bind if dependencies change
 
     const handleCompare = async () => {
         if (!date1 || !date2) {
@@ -210,23 +367,23 @@ export default function SmartPeriodCompare({ symbol, onClose }: SmartPeriodCompa
         today.setHours(23, 59, 59, 999)
 
         if (new Date(date1) > today) {
-            setError('Date Range A start date cannot be in the future')
+            setError('Current Period start date cannot be in the future')
             return
         }
 
         if (new Date(date2) > today) {
-            setError('Date Range B start date cannot be in the future')
+            setError('Reference Period start date cannot be in the future')
             return
         }
 
         // Validate we have at least some data days
         if (period1Info.actualDays < 1) {
-            setError('Date Range A has no valid trading days. Please select an earlier start date.')
+            setError('Current Period has no valid trading days. Please select an earlier start date.')
             return
         }
 
         if (period2Info.actualDays < 1) {
-            setError('Date Range B has no valid trading days. Please select an earlier start date.')
+            setError('Reference Period has no valid trading days. Please select an earlier start date.')
             return
         }
 
@@ -251,12 +408,12 @@ export default function SmartPeriodCompare({ symbol, onClose }: SmartPeriodCompa
 
             // Validate response has data
             if (!data.period1?.data?.length) {
-                setError(`No data found for Date Range A (${formatDateDisplay(date1)} - ${formatDateDisplay(period1Info.endDate)}). The database may not have historical data for this date range.`)
+                setError(`No data found for Current Period (${formatDateDisplay(date1)} - ${formatDateDisplay(period1Info.endDate)}). The database may not have historical data for this date range.`)
                 return
             }
 
             if (!data.period2?.data?.length) {
-                setError(`No data found for Date Range B (${formatDateDisplay(date2)} - ${formatDateDisplay(period2Info.endDate)}). The database may not have historical data for this date range.`)
+                setError(`No data found for Reference Period (${formatDateDisplay(date2)} - ${formatDateDisplay(period2Info.endDate)}). The database may not have historical data for this date range.`)
                 return
             }
 
@@ -319,6 +476,16 @@ export default function SmartPeriodCompare({ symbol, onClose }: SmartPeriodCompa
                 textColor: '#8b949e',
                 fontFamily: "'Inter', sans-serif",
             },
+            localization: {
+                timeFormatter: (time: Time) => {
+                    const index = Math.floor((time as number) / 86400) - 1
+                    if (comparisonData?.period1?.data?.[index]?.date) {
+                        const date = new Date(comparisonData.period1.data[index].date)
+                        return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: '2-digit' })
+                    }
+                    return ''
+                }
+            },
             grid: {
                 vertLines: { color: '#21262d', style: 1 },
                 horzLines: { color: '#21262d', style: 1 },
@@ -350,8 +517,12 @@ export default function SmartPeriodCompare({ symbol, onClose }: SmartPeriodCompa
                 fixLeftEdge: false,
                 fixRightEdge: false,
                 tickMarkFormatter: (time: Time) => {
-                    const dayNum = Math.floor((time as number) / 86400)
-                    return `Day ${dayNum}`
+                    const index = Math.floor((time as number) / 86400) - 1
+                    if (comparisonData?.period1?.data?.[index]?.date) {
+                        const date = new Date(comparisonData.period1.data[index].date)
+                        return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
+                    }
+                    return ''
                 },
             },
             handleScroll: {
@@ -370,11 +541,11 @@ export default function SmartPeriodCompare({ symbol, onClose }: SmartPeriodCompa
 
         chartRef.current = chart
 
-        // Date Range A series (Blue)
+        // Current Period series (Blue)
         const period1Series = chart.addSeries(LineSeries, {
             color: '#58a6ff',
             lineWidth: 3,
-            title: 'Date Range A',
+            title: 'Current Period',
             lastValueVisible: true,
             priceLineVisible: true,
             crosshairMarkerVisible: true,
@@ -383,11 +554,11 @@ export default function SmartPeriodCompare({ symbol, onClose }: SmartPeriodCompa
         })
         period1SeriesRef.current = period1Series
 
-        // Date Range B series (Orange)
+        // Reference Period series (Orange)
         const period2Series = chart.addSeries(LineSeries, {
             color: '#f0883e',
             lineWidth: 3,
-            title: 'Date Range B',
+            title: 'Reference Period',
             lastValueVisible: true,
             priceLineVisible: true,
             crosshairMarkerVisible: true,
@@ -439,10 +610,30 @@ export default function SmartPeriodCompare({ symbol, onClose }: SmartPeriodCompa
             const p1Data = p1.data[dataIndex]
             const p2Data = p2.data[dataIndex]
 
+            // Helper for timezone-safe date formatting
+            const formatDateSafe = (dateStr: string) => {
+                const parts = dateStr.split('-')
+                if (parts.length === 3) {
+                    // Create date object using local components (YYYY, MM-1, DD)
+                    const date = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]))
+                    return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+                }
+                return dateStr
+            }
+
+            const headerDate = p1Data?.date ? formatDateSafe(p1Data.date) : `Day ${dayIndex}`
+            const headerDate2 = p2Data?.date ? formatDateSafe(p2Data.date) : 'N/A'
+
             let tooltipHTML = `
-        <div class="font-bold text-white mb-2 pb-2 border-b border-[#30363d] flex items-center gap-2">
-          <span class="text-lg">📅</span>
-          <span>Day ${dayIndex}</span>
+        <div class="font-bold text-white mb-2 pb-2 border-b border-[#30363d]">
+          <div class="flex items-center justify-between text-xs mb-1 opacity-70">
+             <span>Day ${dayIndex} Comparison</span>
+          </div>
+          <div class="flex items-center gap-2 text-sm">
+             <span class="text-[#58a6ff]">${headerDate}</span>
+             <span class="text-[#8b949e] mx-1">|</span>
+             <span class="text-[#f0883e]">${headerDate2}</span>
+          </div>
         </div>
       `
 
@@ -450,14 +641,13 @@ export default function SmartPeriodCompare({ symbol, onClose }: SmartPeriodCompa
                 const p1Value = chartMode === 'percent' ? p1Data.change_pct : p1Data.close
                 const isPositive = chartMode === 'percent' ? (p1Value ?? 0) >= 0 : true
                 tooltipHTML += `
-          <div class="mb-3">
-            <div class="flex items-center gap-2 mb-1">
-              <div class="w-3 h-3 rounded-full bg-[#58a6ff]"></div>
-              <span class="text-[#58a6ff] font-semibold">Date Range A</span>
+            <div>
+            <div class="flex items-center gap-2 mb-0.5">
+              <div class="w-2.5 h-2.5 rounded-full bg-[#58a6ff]"></div>
+              <span class="text-[#58a6ff] font-semibold text-xs">Current Period</span>
             </div>
-            <div class="ml-5 space-y-0.5">
-              <div class="text-[#8b949e] text-[11px]">${p1Data.date}</div>
-              <div class="font-mono font-bold ${isPositive ? 'text-[#3fb950]' : 'text-[#f85149]'}">
+            <div class="ml-4.5">
+              <div class="font-mono font-bold text-sm ${isPositive ? 'text-[#3fb950]' : 'text-[#f85149]'}">
                 ${chartMode === 'percent' ? (p1Value ?? 0).toFixed(2) + '%' : '₹' + (p1Value ?? 0).toFixed(2)}
               </div>
             </div>
@@ -469,14 +659,13 @@ export default function SmartPeriodCompare({ symbol, onClose }: SmartPeriodCompa
                 const p2Value = chartMode === 'percent' ? p2Data.change_pct : p2Data.close
                 const isPositive = chartMode === 'percent' ? (p2Value ?? 0) >= 0 : true
                 tooltipHTML += `
-          <div>
-            <div class="flex items-center gap-2 mb-1">
-              <div class="w-3 h-3 rounded-full bg-[#f0883e]"></div>
-              <span class="text-[#f0883e] font-semibold">Date Range B</span>
+            <div>
+            <div class="flex items-center gap-2 mb-0.5">
+              <div class="w-2.5 h-2.5 rounded-full bg-[#f0883e]"></div>
+              <span class="text-[#f0883e] font-semibold text-xs">Reference Period</span>
             </div>
-            <div class="ml-5 space-y-0.5">
-              <div class="text-[#8b949e] text-[11px]">${p2Data.date}</div>
-              <div class="font-mono font-bold ${isPositive ? 'text-[#3fb950]' : 'text-[#f85149]'}">
+            <div class="ml-4.5">
+              <div class="font-mono font-bold text-sm ${isPositive ? 'text-[#3fb950]' : 'text-[#f85149]'}">
                 ${chartMode === 'percent' ? (p2Value ?? 0).toFixed(2) + '%' : '₹' + (p2Value ?? 0).toFixed(2)}
               </div>
             </div>
@@ -486,9 +675,33 @@ export default function SmartPeriodCompare({ symbol, onClose }: SmartPeriodCompa
                 tooltipHTML += `
           <div class="text-[#8b949e] italic flex items-center gap-2">
             <div class="w-3 h-3 rounded-full bg-[#f0883e] opacity-40"></div>
-            <span>Date Range B: No data (partial)</span>
+            <span>Reference: No data (partial)</span>
           </div>
         `
+            }
+
+            // Alpha / Gap Calculation
+            if (p1Data && p2Data) {
+                const val1 = chartMode === 'percent' ? p1Data.change_pct : p1Data.close
+                const val2 = chartMode === 'percent' ? p2Data.change_pct : p2Data.close
+
+                if (typeof val1 === 'number' && typeof val2 === 'number') {
+                    const diff = val1 - val2
+                    const isLead = diff >= 0
+                    const label = isLead ? "Lead (Alpha)" : "Lag (Gap)"
+                    const colorClass = isLead ? "text-[#3fb950]" : "text-[#f85149]"
+                    const sign = isLead ? "+" : ""
+                    const diffStr = chartMode === 'percent'
+                        ? `${sign}${diff.toFixed(2)}%`
+                        : `${sign}₹${diff.toFixed(2)}`
+
+                    tooltipHTML += `
+                        <div class="mt-3 pt-2 border-t border-[#30363d] flex items-center justify-between">
+                            <span class="text-xs text-[#8b949e] font-medium uppercase tracking-wide">${label}</span>
+                            <span class="${colorClass} font-mono font-bold text-sm">${diffStr}</span>
+                        </div>
+                    `
+                }
             }
 
             tooltip.innerHTML = tooltipHTML
@@ -706,27 +919,86 @@ export default function SmartPeriodCompare({ symbol, onClose }: SmartPeriodCompa
 
                         {/* Date Selection */}
                         <div className="grid md:grid-cols-2 gap-4">
-                            {/* Date Range A */}
-                            <div className="bg-[#161b22] rounded-xl p-5 border-2 border-[#58a6ff]/30 relative overflow-hidden">
-                                <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-[#58a6ff] to-[#1f6feb]"></div>
+                            {/* Current Period */}
+                            <div className="bg-[#161b22] rounded-xl p-5 border-2 border-[#58a6ff]/30 relative">
+                                <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-[#58a6ff] to-[#1f6feb] rounded-t-lg"></div>
 
                                 <div className="flex items-center gap-2 mb-4">
                                     <div className="w-4 h-4 rounded-full bg-[#58a6ff]"></div>
-                                    <h4 className="text-white font-semibold">Date Range A</h4>
+                                    <h4 className="text-white font-semibold">Current Period</h4>
                                 </div>
 
                                 <div className="space-y-3">
                                     <div>
-                                        <label className="text-xs text-[#8b949e] block mb-1.5">
-                                            Start Date <span className="text-[#484f58]">(DD-MM-YYYY)</span>
-                                        </label>
-                                        <input
-                                            type="date"
-                                            value={date1}
-                                            max={getTodayString()}
-                                            onChange={(e) => setDate1(e.target.value)}
-                                            className="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2.5 text-white focus:border-[#58a6ff] outline-none transition-colors"
-                                        />
+                                        <div className="flex items-center justify-between mb-1.5">
+                                            <label className="text-xs text-[#8b949e]">
+                                                Start Date <span className="text-[#484f58]">(DD/MM/YYYY)</span>
+                                            </label>
+
+                                            <button
+                                                onClick={() => {
+                                                    const newAutoState = !isAutoDate1
+                                                    setIsAutoDate1(newAutoState)
+                                                    if (newAutoState) {
+                                                        // If switching back to auto, recalculate immediately
+                                                        setDate1(getRecentPeriodStart(activeDays))
+                                                        setShowCal1(false)
+                                                    }
+                                                }}
+                                                className={`flex items-center gap-1.5 text-[10px] px-1.5 py-0.5 rounded border transition-colors ${isAutoDate1
+                                                    ? 'text-[#58a6ff] bg-[#58a6ff]/10 border-[#58a6ff]/20'
+                                                    : 'text-[#8b949e] bg-[#21262d] border-[#30363d] hover:text-white'
+                                                    }`}
+                                            >
+                                                {isAutoDate1 ? <CheckSquare size={12} /> : <Square size={12} />}
+                                                <span>Auto (Current)</span>
+                                            </button>
+                                        </div>
+
+                                        <div className={`relative ${isAutoDate1 ? 'opacity-90' : ''}`} title={isAutoDate1 ? "Auto-set to current period" : "Select start date"}>
+                                            <input
+                                                type="text"
+                                                value={date1Input}
+                                                readOnly={isAutoDate1}
+                                                disabled={isAutoDate1}
+                                                onChange={(e) => handleInputMask(e, handleDate1InputChange)}
+                                                onKeyDown={handleKeyDown}
+                                                placeholder="DD/MM/YYYY"
+                                                maxLength={10}
+                                                className={`w-full bg-[#0d1117] border rounded-lg pl-3 pr-10 py-2.5 text-white outline-none font-mono transition-colors ${isAutoDate1
+                                                    ? 'border-[#30363d] cursor-not-allowed text-[#8b949e]'
+                                                    : 'border-[#30363d] focus:border-[#58a6ff]'
+                                                    }`}
+                                            />
+
+                                            {isAutoDate1 ? (
+                                                <div className="absolute right-2 top-1/2 -translate-y-1/2 text-[#8b949e] p-1">
+                                                    <RotateCcw size={14} />
+                                                </div>
+                                            ) : (
+                                                <button
+                                                    onClick={() => setShowCal1(!showCal1)}
+                                                    className="absolute right-2 top-1/2 -translate-y-1/2 text-[#8b949e] hover:text-[#58a6ff] transition-colors p-1"
+                                                    aria-label="Toggle calendar"
+                                                >
+                                                    <Calendar size={16} />
+                                                </button>
+                                            )}
+
+                                            {!isAutoDate1 && (
+                                                <CalendarPopup
+                                                    isOpen={showCal1}
+                                                    onClose={() => setShowCal1(false)}
+                                                    value={date1Input}
+                                                    onChange={(val) => {
+                                                        setDate1Input(val)
+                                                        setDate1(formatDateForAPI(val))
+                                                    }}
+                                                    disablePast={false}
+                                                    className="top-full mt-2 right-0"
+                                                />
+                                            )}
+                                        </div>
                                         {date1 && (
                                             <div className="mt-1.5 text-[10px] text-[#58a6ff] font-medium">
                                                 Selected: {formatDateDisplay(date1)}
@@ -755,27 +1027,70 @@ export default function SmartPeriodCompare({ symbol, onClose }: SmartPeriodCompa
                                 </div>
                             </div>
 
-                            {/* Date Range B */}
-                            <div className="bg-[#161b22] rounded-xl p-5 border-2 border-[#f0883e]/30 relative overflow-hidden">
-                                <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-[#f0883e] to-[#da3633]"></div>
+                            {/* Reference Period */}
+                            <div className="bg-[#161b22] rounded-xl p-5 border-2 border-[#f0883e]/30 relative">
+                                <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-[#f0883e] to-[#da3633] rounded-t-lg"></div>
 
-                                <div className="flex items-center gap-2 mb-4">
-                                    <div className="w-4 h-4 rounded-full bg-[#f0883e]"></div>
-                                    <h4 className="text-white font-semibold">Date Range B</h4>
+                                <div className="flex items-center justify-between mb-4">
+                                    <div className="flex items-center gap-2">
+                                        <div className="w-4 h-4 rounded-full bg-[#f0883e]"></div>
+                                        <h4 className="text-white font-semibold">Reference Period</h4>
+                                    </div>
+
+                                    {/* Quick Actions */}
+                                    <div className="flex gap-1.5">
+                                        <button
+                                            onClick={handleSetPreviousPeriod}
+                                            className="text-[10px] px-2 py-1 bg-[#21262d] hover:bg-[#30363d] text-[#8b949e] hover:text-white border border-[#30363d] rounded transition-all"
+                                            title="Compare with immediately previous period"
+                                        >
+                                            Previous
+                                        </button>
+                                        <button
+                                            onClick={handleSetLastYearPeriod}
+                                            className="text-[10px] px-2 py-1 bg-[#21262d] hover:bg-[#30363d] text-[#8b949e] hover:text-white border border-[#30363d] rounded transition-all"
+                                            title="Compare with same period last year"
+                                        >
+                                            1Y Ago
+                                        </button>
+                                    </div>
                                 </div>
 
                                 <div className="space-y-3">
                                     <div>
                                         <label className="text-xs text-[#8b949e] block mb-1.5">
-                                            Start Date <span className="text-[#484f58]">(DD-MM-YYYY)</span>
+                                            Start Date <span className="text-[#484f58]">(DD/MM/YYYY)</span>
                                         </label>
-                                        <input
-                                            type="date"
-                                            value={date2}
-                                            max={getTodayString()}
-                                            onChange={(e) => setDate2(e.target.value)}
-                                            className="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2.5 text-white focus:border-[#f0883e] outline-none transition-colors"
-                                        />
+                                        <div className="relative">
+                                            <input
+                                                type="text"
+                                                value={date2Input}
+                                                onChange={(e) => handleInputMask(e, handleDate2InputChange)}
+                                                onKeyDown={handleKeyDown}
+                                                placeholder="DD/MM/YYYY"
+                                                maxLength={10}
+                                                className="w-full bg-[#0d1117] border border-[#30363d] rounded-lg pl-3 pr-10 py-2.5 text-white focus:border-[#f0883e] outline-none transition-colors font-mono"
+                                            />
+                                            <button
+                                                onClick={() => setShowCal2(!showCal2)}
+                                                className="absolute right-2 top-1/2 -translate-y-1/2 text-[#8b949e] hover:text-[#f0883e] transition-colors p-1"
+                                                aria-label="Toggle calendar"
+                                            >
+                                                <Calendar size={16} />
+                                            </button>
+
+                                            <CalendarPopup
+                                                isOpen={showCal2}
+                                                onClose={() => setShowCal2(false)}
+                                                value={date2Input}
+                                                onChange={(val) => {
+                                                    setDate2Input(val)
+                                                    setDate2(formatDateForAPI(val))
+                                                }}
+                                                disablePast={false}
+                                                className="top-full mt-2 right-0"
+                                            />
+                                        </div>
                                         {date2 && (
                                             <div className="mt-1.5 text-[10px] text-[#f0883e] font-medium">
                                                 Selected: {formatDateDisplay(date2)}
@@ -783,24 +1098,28 @@ export default function SmartPeriodCompare({ symbol, onClose }: SmartPeriodCompa
                                         )}
                                     </div>
 
-                                    <div className="flex items-center gap-2 text-xs bg-[#0d1117]/50 rounded-lg p-3">
-                                        <Calendar size={14} className="text-[#f0883e]" />
-                                        <div>
-                                            <span className="text-[#8b949e]">End Date: </span>
-                                            <span className="text-white font-medium">{formatDateDisplay(period2Info.endDate)}</span>
-                                            {period2Info.isPartial && (
-                                                <span className="ml-2 text-yellow-400">(Today - Partial)</span>
-                                            )}
-                                        </div>
-                                    </div>
+                                    {date2 && (
+                                        <>
+                                            <div className="flex items-center gap-2 text-xs bg-[#0d1117]/50 rounded-lg p-3">
+                                                <Calendar size={14} className="text-[#f0883e]" />
+                                                <div>
+                                                    <span className="text-[#8b949e]">End Date: </span>
+                                                    <span className="text-white font-medium">{formatDateDisplay(period2Info.endDate)}</span>
+                                                    {period2Info.isPartial && (
+                                                        <span className="ml-2 text-yellow-400">(Today - Partial)</span>
+                                                    )}
+                                                </div>
+                                            </div>
 
-                                    <div className="text-xs text-[#8b949e] flex items-center gap-2">
-                                        <Zap size={12} className="text-[#f0883e]" />
-                                        <span>
-                                            <strong className="text-white">{period2Info.actualDays}</strong> days of data
-                                            {period2Info.isPartial && ' (partial)'}
-                                        </span>
-                                    </div>
+                                            <div className="text-xs text-[#8b949e] flex items-center gap-2">
+                                                <Zap size={12} className="text-[#f0883e]" />
+                                                <span>
+                                                    <strong className="text-white">{period2Info.actualDays}</strong> days of data
+                                                    {period2Info.isPartial && ' (partial)'}
+                                                </span>
+                                            </div>
+                                        </>
+                                    )}
                                 </div>
                             </div>
                         </div>
@@ -832,8 +1151,9 @@ export default function SmartPeriodCompare({ symbol, onClose }: SmartPeriodCompa
                         {/* Compare Button */}
                         <button
                             onClick={handleCompare}
-                            disabled={loading}
-                            className="w-full py-4 bg-gradient-to-r from-[#1f6feb] to-[#58a6ff] text-white rounded-xl font-bold text-lg hover:opacity-90 disabled:opacity-50 transition-all flex items-center justify-center gap-3 shadow-lg shadow-[#1f6feb]/20"
+                            disabled={loading || !date1 || !date2}
+                            className="w-full py-4 bg-gradient-to-r from-[#1f6feb] to-[#58a6ff] text-white rounded-xl font-bold text-lg hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-3 shadow-lg shadow-[#1f6feb]/20 disabled:shadow-none"
+                            title={!date2 ? "Please select a Reference Period to start comparison" : "Start Comparison"}
                         >
                             {loading ? (
                                 <>
@@ -851,25 +1171,25 @@ export default function SmartPeriodCompare({ symbol, onClose }: SmartPeriodCompa
 
                     {/* ===== STEP 2: Chart View ===== */}
                     {step === 2 && comparisonData && comparisonData.period1 && comparisonData.period2 && (
-                        <div className="space-y-5">
+                        <div ref={reportContainerRef} className="space-y-5 bg-[#0d1117] p-4 -m-4 rounded-xl"> {/* Added bg and padding for screenshot context */}
                             {/* Chart Controls */}
                             <div className="flex items-center justify-between flex-wrap gap-3">
                                 <div className="flex items-center gap-3">
-                                    <h3 className="text-white font-semibold flex items-center gap-2">
-                                        <TrendingUp size={18} className="text-[#3fb950]" />
-                                        Performance Chart
+                                    <h3 className="text-white font-semibold flex items-center gap-2 text-lg">
+                                        <TrendingUp size={20} className="text-[#3fb950]" />
+                                        <span>{symbol} Analysis</span>
                                     </h3>
 
                                     {/* Legend */}
                                     <div className="flex items-center gap-4 text-xs bg-[#161b22] px-3 py-1.5 rounded-full border border-[#21262d]">
                                         <span className="flex items-center gap-1.5">
                                             <span className="w-2.5 h-2.5 rounded-full bg-[#58a6ff]"></span>
-                                            <span className="text-[#58a6ff]">Date Range A</span>
+                                            <span className="text-[#58a6ff]">Current Period</span>
                                             <span className="text-[#484f58]">({comparisonData.period1.summary.total_days} days)</span>
                                         </span>
                                         <span className="flex items-center gap-1.5">
                                             <span className="w-2.5 h-2.5 rounded-full bg-[#f0883e]"></span>
-                                            <span className="text-[#f0883e]">Date Range B</span>
+                                            <span className="text-[#f0883e]">Reference Period</span>
                                             <span className="text-[#484f58]">({comparisonData.period2.summary.total_days} days)</span>
                                         </span>
                                     </div>
@@ -893,6 +1213,14 @@ export default function SmartPeriodCompare({ symbol, onClose }: SmartPeriodCompa
                                     </div>
 
                                     <button
+                                        onClick={handleDownloadSnapshot}
+                                        className="px-3 py-1.5 text-xs rounded-lg bg-[#161b22] text-[#8b949e] hover:text-white border border-[#21262d] hover:border-[#30363d] transition-all flex items-center gap-1.5"
+                                        title="Download Chart Image (Press 'S')"
+                                    >
+                                        <Camera size={14} />
+                                        <span>Save</span>
+                                    </button>
+                                    <button
                                         onClick={handleResetZoom}
                                         className="px-3 py-1.5 text-xs rounded-lg bg-[#161b22] text-[#8b949e] hover:text-white border border-[#21262d] hover:border-[#30363d] transition-all"
                                     >
@@ -914,14 +1242,14 @@ export default function SmartPeriodCompare({ symbol, onClose }: SmartPeriodCompa
                                 <SummaryCard
                                     period={comparisonData.period1}
                                     color="#58a6ff"
-                                    label="Date Range A"
+                                    label="Current Period"
                                     isPartial={period1Info.isPartial}
                                     days={period1Info.actualDays}
                                 />
                                 <SummaryCard
                                     period={comparisonData.period2}
                                     color="#f0883e"
-                                    label="Date Range B"
+                                    label="Reference Period"
                                     isPartial={period2Info.isPartial}
                                     days={period2Info.actualDays}
                                 />
@@ -937,35 +1265,61 @@ export default function SmartPeriodCompare({ symbol, onClose }: SmartPeriodCompa
 
                                     <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                                         <div className="text-center p-4 bg-[#0d1117] rounded-xl border border-[#21262d]">
-                                            <p className="text-[10px] text-[#8b949e] uppercase tracking-wide mb-2">Return Difference</p>
+                                            <p className="text-[10px] text-[#8b949e] uppercase tracking-wide mb-2">Pattern Match</p>
+                                            <p className={`text-2xl font-bold font-mono ${patternCorrelation > 60 ? 'text-[#3fb950]' :
+                                                    patternCorrelation > 20 ? 'text-yellow-400' :
+                                                        patternCorrelation < -20 ? 'text-[#f85149]' : 'text-[#8b949e]'
+                                                }`}>
+                                                {patternCorrelation}%
+                                            </p>
+                                            <p className="text-[9px] text-[#8b949e] mt-1">
+                                                {patternCorrelation > 20 ? 'Similarity' : patternCorrelation < -20 ? 'Inverse' : 'Correlation'}
+                                            </p>
+                                        </div>
+
+                                        <div className="text-center p-4 bg-[#0d1117] rounded-xl border border-[#21262d]">
+                                            <p className="text-[10px] text-[#8b949e] uppercase tracking-wide mb-2">Return Diff</p>
                                             <p className={`text-2xl font-bold font-mono ${comparisonData.comparison.return_difference >= 0 ? 'text-[#3fb950]' : 'text-[#f85149]'}`}>
                                                 {comparisonData.comparison.return_difference >= 0 ? '+' : ''}{comparisonData.comparison.return_difference}%
                                             </p>
+                                            <p className="text-[9px] text-[#8b949e] mt-1">{comparisonData.comparison.period1_better ? 'Current leads' : 'Reference leads'}</p>
                                         </div>
 
                                         <div className="text-center p-4 bg-[#0d1117] rounded-xl border border-[#21262d]">
                                             <p className="text-[10px] text-[#8b949e] uppercase tracking-wide mb-2">Winner</p>
-                                            <p className="text-2xl font-bold">
+                                            <div className="flex items-center justify-center gap-2 h-8">
                                                 {comparisonData.comparison.period1_better ? (
-                                                    <span className="text-[#58a6ff]">🔵 A</span>
+                                                    <>
+                                                        <div className="w-3 h-3 rounded-full bg-[#58a6ff]"></div>
+                                                        <span className="font-bold text-[#58a6ff]">Current</span>
+                                                    </>
                                                 ) : (
-                                                    <span className="text-[#f0883e]">🟠 B</span>
+                                                    <>
+                                                        <div className="w-3 h-3 rounded-full bg-[#f0883e]"></div>
+                                                        <span className="font-bold text-[#f0883e]">Reference</span>
+                                                    </>
                                                 )}
-                                            </p>
+                                            </div>
+                                            <p className="text-[9px] text-[#8b949e] mt-1">based on return</p>
                                         </div>
 
                                         <div className="text-center p-4 bg-[#0d1117] rounded-xl border border-[#21262d]">
-                                            <p className="text-[10px] text-[#8b949e] uppercase tracking-wide mb-2">Avg Price Change</p>
-                                            <p className={`text-2xl font-bold font-mono ${comparisonData.comparison.avg_price_change >= 0 ? 'text-[#3fb950]' : 'text-[#f85149]'}`}>
-                                                {comparisonData.comparison.avg_price_change >= 0 ? '+' : ''}{comparisonData.comparison.avg_price_change}%
-                                            </p>
-                                        </div>
+                                            <p className="text-[10px] text-[#8b949e] uppercase tracking-wide mb-2">Avg Volatility</p>
 
-                                        <div className="text-center p-4 bg-[#0d1117] rounded-xl border border-[#21262d]">
-                                            <p className="text-[10px] text-[#8b949e] uppercase tracking-wide mb-2">Volume Change</p>
-                                            <p className={`text-2xl font-bold font-mono ${comparisonData.comparison.volume_change_pct >= 0 ? 'text-[#3fb950]' : 'text-[#f85149]'}`}>
-                                                {comparisonData.comparison.volume_change_pct >= 0 ? '+' : ''}{comparisonData.comparison.volume_change_pct?.toFixed(1)}%
-                                            </p>
+                                            {comparisonData.comparison.volatility_comparison ? (
+                                                <>
+                                                    <p className="text-xl font-bold font-mono text-white">
+                                                        {comparisonData.comparison.volatility_comparison.period1_range_pct}%
+                                                    </p>
+                                                    <p className="text-[9px] text-[#8b949e] mt-1">
+                                                        Vs {comparisonData.comparison.volatility_comparison.period2_range_pct}% (Ref)
+                                                    </p>
+                                                </>
+                                            ) : (
+                                                <p className="text-xl font-bold font-mono text-white">
+                                                    {Math.abs(Number(comparisonData.comparison.avg_price_change))}%
+                                                </p>
+                                            )}
                                         </div>
                                     </div>
                                 </div>
