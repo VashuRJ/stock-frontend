@@ -4,14 +4,14 @@ import {
 } from 'recharts'
 import EChartCandle from '@/components/EChartCandle'
 import EChartLine from '@/components/EChartLine'
-import SmartPeriodCompare from '@/components/SmartPeriodCompare'
 import StockSparkline from '@/components/charts/StockSparkline'
 import TopMoversPanel from '@/components/dashboard/TopMoversPanel'
 import StockInsightsModal from '@/components/StockInsightsModal'
+import { AnalyticsToolbar, SmartPeriodCompare, PatternMatcher } from '@/components/analytics'
 
 import {
   Search, Bell, User, Plus, Activity, TrendingUp, TrendingDown, LogOut, X, Check,
-  ChevronRight, ChevronDown, Pencil, Trash2, CheckCircle2, ArrowLeftRight, Info
+  ChevronRight, ChevronDown, Pencil, Trash2, CheckCircle2, Info
 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '@/api/client'
@@ -127,6 +127,7 @@ export default function Dashboard() {
   const [isIndicatorMenuOpen, setIsIndicatorMenuOpen] = useState(false)
   const [isFullscreen, setIsFullscreen] = useState(false) // NEW: Fullscreen mode
   const [showComparisonModal, setShowComparisonModal] = useState(false) // Period Comparison
+  const [showPatternMatchModal, setShowPatternMatchModal] = useState(false) // Pattern Matcher
 
 
   // Search State
@@ -1336,8 +1337,9 @@ export default function Dashboard() {
                             </div>
                           ))}
                         </div>
-                      )}
+                      )}\r
                     </div>
+
                     {/* Fullscreen Button */}
                     <button
                       onClick={() => setIsFullscreen(!isFullscreen)}
@@ -1404,7 +1406,7 @@ export default function Dashboard() {
                     >
                       {tf}
                     </button>
-                  ))}
+                  ))}\r
                 </div>
 
                 {/* Chart Type Selector */}
@@ -1453,15 +1455,11 @@ export default function Dashboard() {
                   📈 VOLUME
                 </button>
 
-                {/* Period Comparison Button */}
-                <button
-                  onClick={() => setShowComparisonModal(true)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-[10px] font-bold rounded bg-[#1e222d] text-[#787b86] hover:text-white hover:bg-[#2962ff]/20 border border-[#2a2e39] hover:border-[#2962ff] transition-all"
-                  title="Compare with different time period"
-                >
-                  <ArrowLeftRight size={12} />
-                  COMPARE
-                </button>
+                {/* Analytics Toolbar - Unified Dropdown for Compare & Pattern */}
+                <AnalyticsToolbar
+                  onCompareClick={() => setShowComparisonModal(true)}
+                  onPatternClick={() => setShowPatternMatchModal(true)}
+                />
 
 
               </div>
@@ -1763,6 +1761,14 @@ export default function Dashboard() {
             setInsightsModalOpen(false)
             setInsightsSymbol(null)
           }}
+        />
+      )}
+
+      {/* Pattern Matcher Modal */}
+      {showPatternMatchModal && (
+        <PatternMatcher
+          symbol={selectedSymbol}
+          onClose={() => setShowPatternMatchModal(false)}
         />
       )}
     </>
