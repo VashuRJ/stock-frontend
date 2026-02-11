@@ -1337,7 +1337,7 @@ export default function Dashboard() {
                             </div>
                           ))}
                         </div>
-                      )}\r
+                      )}
                     </div>
 
                     {/* Fullscreen Button */}
@@ -1406,7 +1406,7 @@ export default function Dashboard() {
                     >
                       {tf}
                     </button>
-                  ))}\r
+                  ))}
                 </div>
 
                 {/* Chart Type Selector */}
