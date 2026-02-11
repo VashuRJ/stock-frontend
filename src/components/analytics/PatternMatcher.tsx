@@ -182,10 +182,10 @@ export default function PatternMatcher({ symbol, onClose }: PatternMatcherProps)
         setError('');
     };
 
-    // Auto-run on mount
-    useEffect(() => {
-        runAnalysis();
-    }, []);
+    // Auto-run on mount - REMOVED to show config screen first
+    // useEffect(() => {
+    //     runAnalysis();
+    // }, []);
 
     // Chart initialization
     useEffect(() => {
