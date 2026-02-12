@@ -1,12 +1,13 @@
 import React, { useState, useEffect, lazy, Suspense } from 'react'
 import { Link, NavLink, useNavigate } from 'react-router-dom'
+import { BriefcaseBusiness } from 'lucide-react';
 
-const Profile = lazy(() => import('./ProfileMenu'));
+const ProfileMenu = lazy(() => import('./ProfileMenu'));
 
 export default function Navbar() {
   const navigate = useNavigate()
   const [isLoggedIn, setIsLoggedIn] = useState(false)
-  const [userName, setUserName] = useState('')
+  const [userEmail, setUserEmail] = useState('')
 
   useEffect(() => {
     const token = localStorage.getItem('access_token')
@@ -15,7 +16,7 @@ export default function Navbar() {
     }
     const storedEmail = localStorage.getItem('user_email') || ' '
     setIsLoggedIn(!!token)
-    setUserName(storedEmail)
+    setUserEmail(storedEmail)
   }, [])
 
   return (
@@ -66,16 +67,47 @@ export default function Navbar() {
             {/* 3. RIGHT SIDE: Navigation & Auth Buttons */}
             <div className="flex items-center justify-between gap-6">
 
+              <div>
+                {/* Navigation Links */}
+                <NavLink
+                  to="/dashboard"
+                  className={({ isActive }) =>
+                    `text-sm font-medium hover:text-white transition-colors ${isActive ? 'text-white' : 'text-[#c5c8d1]'}`
+                  }
+                >
+                  Dashboard
+                </NavLink>
+              </div>
+              <div>
+                {/* Navigation Links */}
+                <NavLink
+                  // to="/analyzer"
+                  to="/test"
+                  className={({ isActive }) =>
+                    `text-sm font-medium hover:text-white transition-colors ${isActive ? 'text-white' : 'text-[#c5c8d1]'}`
+                  }
+                >
+                  Analyzer
+                </NavLink>
+              </div>
+              <div>
+                <NavLink
+                  to="/portfolio"
+                  className={({ isActive }) =>
+                    `text-sm font-medium hover:text-white transition-colors ${isActive ? 'text-white' : 'text-[#c5c8d1]'}`
+                  }
+                >
+                  <BriefcaseBusiness className="inline mr-1 size-5" />Portfolio
+                </NavLink>
+              </div>
               {/* User Menu Section */}
               <div className="flex items-center gap-3 border-l border-[#c43838] pl-6">
-
-
 
                 {isLoggedIn ? (
                   /* Logged In: Show Profile & Logout */
                   <>
                     <Suspense fallback={<div>Loading...</div>}>
-                      <Profile />
+                      <ProfileMenu userEmail={userEmail} />
                     </Suspense>
                   </>
                 ) : (

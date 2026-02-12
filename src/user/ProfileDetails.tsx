@@ -1,7 +1,7 @@
 import React from 'react'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom';
-import { User, Mail, Phone, Camera, Save, Edit2, X } from 'lucide-react';
+import { Mail, Phone, Camera, Save, Edit2, X } from 'lucide-react';
 
 import { api } from '@/api/client';
 import { toast } from 'react-toastify';
@@ -14,13 +14,23 @@ interface UserProfile {
   created_at?: Date;
 }
 
+interface UserExtraDetails {
+  id: number;
+  user_id: number;
+  profile_pic_url?: string;
+}
+
 export const ProfileDetails = () => {
 
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
   const StoredEmail = localStorage.getItem('user_email') || ' ';
+  const userId = localStorage.getItem('user_id');
   const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [profilePicUrl, setProfilePicUrl] = useState<string | null>(null);
   const [isEditing, setIsEditing] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const UserPersonaldetails = async (email: string) => {
     //fetch user details from backend using StoredEmail
@@ -43,9 +53,25 @@ export const ProfileDetails = () => {
     }
 
     UserPersonaldetails(StoredEmail);
-
-
   }, []);
+
+  // Fetch profile picture
+  useEffect(() => {
+    const fetchProfilePic = async () => {
+      if (!userId) return;
+      
+      try {
+        const res = await api.get<UserExtraDetails>(`/user-extra-details/${userId}`);
+        if (res.data?.profile_pic_url) {
+          setProfilePicUrl(res.data.profile_pic_url);
+        }
+      } catch (err) {
+        console.log('Could not fetch profile picture');
+      }
+    };
+
+    fetchProfilePic();
+  }, [userId]);
 
   // const handleInputChange = (e:data) => {
   //   const { name, value } = e.target;
@@ -64,6 +90,53 @@ export const ProfileDetails = () => {
     }
   };
 
+  const handleProfilePicUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !userId) return;
+
+    // Validate file size (max 1MB)
+    if (file.size > 1024 * 1024) {
+      toast.error('File size must be less than 1MB');
+      return;
+    }
+
+    // Validate file type
+    const allowedTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+    if (!allowedTypes.includes(file.type)) {
+      toast.error('Only jpg, png, gif, webp files are allowed');
+      return;
+    }
+
+    setUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const res = await api.post<UserExtraDetails>(
+        `/user-extra-details/${userId}/profile-pic`,
+        formData,
+        {
+          headers: {
+            'Content-Type': 'multipart/form-data',
+          },
+        }
+      );
+
+      if (res.data?.profile_pic_url) {
+        setProfilePicUrl(res.data.profile_pic_url);
+        toast.success('Profile picture updated!');
+      }
+    } catch (err) {
+      toast.error('Failed to upload profile picture');
+    } finally {
+      setUploading(false);
+      // Reset file input
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    }
+  };
+
 
 
 
@@ -76,15 +149,38 @@ export const ProfileDetails = () => {
           <div className="flex flex-col md:flex-row items-center md:items-start gap-6">
             {/* Profile Picture */}
             <div className="relative">
-              <div className="w-32 h-32 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white text-4xl font-bold shadow-lg">
-                {(profile?.full_name?.charAt(0) || StoredEmail.trim().charAt(0) || 'U').toUpperCase()}
+              <div className="w-32 h-32 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white text-4xl font-bold shadow-lg overflow-hidden">
+                {profilePicUrl ? (
+                  <img 
+                    src={profilePicUrl} 
+                    alt="Profile" 
+                    className="w-full h-full object-cover"
+                    onError={() => setProfilePicUrl(null)}
+                  />
+                ) : (
+                  (profile?.full_name?.charAt(0) || StoredEmail.trim().charAt(0) || 'U').toUpperCase()
+                )}
               </div>
+              <input
+                type="file"
+                ref={fileInputRef}
+                onChange={handleProfilePicUpload}
+                accept="image/jpeg,image/png,image/gif,image/webp"
+                className="hidden"
+                placeholder='add photo'
+              />
               <button
-                className="absolute bottom-0 right-0 bg-white p-2 rounded-full shadow-lg hover:bg-gray-50 transition"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploading}
+                className="absolute bottom-0 right-0 bg-white p-2 rounded-full shadow-lg hover:bg-gray-50 transition disabled:opacity-50"
                 aria-label="Upload profile picture"
                 title="Upload profile picture"
               >
-                <Camera className="w-5 h-5 text-gray-700" />
+                {uploading ? (
+                  <div className="w-5 h-5 border-2 border-gray-700 border-t-transparent rounded-full animate-spin" />
+                ) : (
+                  <Camera className="w-5 h-5 text-gray-700" />
+                )}
               </button>
             </div>
 
@@ -200,7 +296,7 @@ export const ProfileDetails = () => {
         </div>
 
         <div className='bg-[#3d4963] rounded-2xl shadow-lg p-6 mt-6 min-h-[200px]'>
-          <h2 className="text-2xl font-bold text-white">Additional Information</h2>
+          <h2 className="text-2xl font-bold text-white">Additional </h2>
           <p className="text-gray-100">Your recent Searches.</p>
 
         </div>

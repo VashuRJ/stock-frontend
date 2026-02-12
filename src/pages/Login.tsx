@@ -17,7 +17,7 @@ export default function Login() {
     setLoading(true)
     try {
       const res = await api.post('/auth/login', { email, password })
-      const { access_token, token, user } = res.data
+      const { access_token, user } = res.data
       
       // Save to localStorage
       localStorage.setItem('access_token', access_token)
