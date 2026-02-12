@@ -4,6 +4,7 @@ import {
     IChartApi,
     ISeriesApi,
     LineSeries,
+    AreaSeries,
     LineData,
     Time,
     CrosshairMode
@@ -117,10 +118,10 @@ const calculateEndDate = (startDate: string, days: number): { endDate: string; i
         }
 
         if (calculatedEnd > today) {
-            // Partial data - ends at today
+            // Partial data - show calculated end date but mark as partial
             const actualDays = Math.ceil((today.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1
             return {
-                endDate: formatDateForInput(today),
+                endDate: formatDateForInput(calculatedEnd), // Show user's selected duration end date
                 isPartial: true,
                 actualDays: Math.max(1, actualDays)
             }
@@ -518,9 +519,20 @@ export default function SmartPeriodCompare({ symbol, onClose }: SmartPeriodCompa
                 fixRightEdge: false,
                 tickMarkFormatter: (time: Time) => {
                     const index = Math.floor((time as number) / 86400) - 1
+                    // First try to get date from actual data
                     if (comparisonData?.period1?.data?.[index]?.date) {
                         const date = new Date(comparisonData.period1.data[index].date)
                         return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
+                    }
+                    // For future dates without data, calculate from start date
+                    if (date1 && index >= 0) {
+                        const parts = date1.split('-')
+                        if (parts.length === 3) {
+                            const startDate = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]))
+                            const targetDate = new Date(startDate)
+                            targetDate.setDate(startDate.getDate() + index)
+                            return targetDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
+                        }
                     }
                     return ''
                 },
@@ -571,24 +583,62 @@ export default function SmartPeriodCompare({ symbol, onClose }: SmartPeriodCompa
         const p1 = comparisonData.period1
         const p2 = comparisonData.period2
 
-        const period1Data: LineData<Time>[] = p1.data.map((d, i) => {
-            const value = chartMode === 'percent' ? d.change_pct : d.close
-            return {
-                time: ((i + 1) * 86400) as Time,
-                value: value,
-            }
-        }).filter(d => typeof d.value === 'number' && !isNaN(d.value)) as LineData<Time>[]
+        // Create padded data arrays that extend to activeDays
+        // This ensures X-axis shows the full selected duration even if data is partial
+        const createPaddedData = (data: any[], targetDays: number): LineData<Time>[] => {
+            const result: LineData<Time>[] = []
 
-        const period2Data: LineData<Time>[] = p2.data.map((d, i) => {
-            const value = chartMode === 'percent' ? d.change_pct : d.close
-            return {
-                time: ((i + 1) * 86400) as Time,
-                value: value,
+            // Add actual data points
+            for (let i = 0; i < targetDays; i++) {
+                const d = data[i]
+                if (d) {
+                    const value = chartMode === 'percent' ? d.change_pct : d.close
+                    if (typeof value === 'number' && !isNaN(value)) {
+                        result.push({
+                            time: ((i + 1) * 86400) as Time,
+                            value: value,
+                        })
+                    }
+                }
             }
-        }).filter(d => typeof d.value === 'number' && !isNaN(d.value)) as LineData<Time>[]
+
+            return result
+        }
+
+        const period1Data = createPaddedData(p1.data, activeDays)
+        const period2Data = createPaddedData(p2.data, activeDays)
 
         period1Series.setData(period1Data)
         period2Series.setData(period2Data)
+
+        // Add invisible anchor point to extend X-axis to full duration
+        // This forces the time scale to include Day 30 even if no real data exists
+        const maxDataPoints = Math.max(period1Data.length, period2Data.length)
+        if (maxDataPoints < activeDays && maxDataPoints > 0) {
+            // Get a value from existing data to use for the anchor (prevents price scale issues)
+            const anchorValue = period1Data.length > 0 ? period1Data[0].value : 0
+
+            // Add data point at the last day to the SECOND series only (so first series line doesn't extend)
+            // We'll add it to period2 since that's historical and usually has complete data
+            // Adding to both would create weird lines, so we use a separate hidden series
+
+            // Create invisible series just for axis extension
+            const axisExtender = chart.addSeries(AreaSeries, {
+                lineColor: 'transparent',
+                topColor: 'transparent',
+                bottomColor: 'transparent',
+                lineWidth: 1,
+                lastValueVisible: false,
+                priceLineVisible: false,
+                crosshairMarkerVisible: false,
+            })
+
+            // Set data with first point + last day point
+            axisExtender.setData([
+                { time: (1 * 86400) as Time, value: anchorValue },
+                { time: (activeDays * 86400) as Time, value: anchorValue },
+            ])
+        }
 
         chart.timeScale().fitContent()
 
@@ -740,7 +790,7 @@ export default function SmartPeriodCompare({ symbol, onClose }: SmartPeriodCompa
             chart.remove()
             chartRef.current = null
         }
-    }, [comparisonData, chartMode])
+    }, [comparisonData, chartMode, activeDays])
 
     // Reset zoom handler
     const handleResetZoom = () => {
@@ -1267,8 +1317,8 @@ export default function SmartPeriodCompare({ symbol, onClose }: SmartPeriodCompa
                                         <div className="text-center p-4 bg-[#0d1117] rounded-xl border border-[#21262d]">
                                             <p className="text-[10px] text-[#8b949e] uppercase tracking-wide mb-2">Pattern Match</p>
                                             <p className={`text-2xl font-bold font-mono ${patternCorrelation > 60 ? 'text-[#3fb950]' :
-                                                    patternCorrelation > 20 ? 'text-yellow-400' :
-                                                        patternCorrelation < -20 ? 'text-[#f85149]' : 'text-[#8b949e]'
+                                                patternCorrelation > 20 ? 'text-yellow-400' :
+                                                    patternCorrelation < -20 ? 'text-[#f85149]' : 'text-[#8b949e]'
                                                 }`}>
                                                 {patternCorrelation}%
                                             </p>
