@@ -35,10 +35,10 @@ const LivePriceWithPL: React.FC<{ symbol: string; avgBuyPrice: number }> = ({ sy
 
     return (
         <div className='flex flex-col items-center'>
-            <span className={livePrice === null ? 'text-gray-400' : isProfit ? 'text-green-400' : 'text-red-400'}>
+            <span className={livePrice === null ? 'text-gray-200' : isProfit ? 'text-green-400' : 'text-red-400'}>
                 ₹{currentPrice.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </span>
-            <span className='text-gray-500 text-xs'>
+            <span className='text-gray-100 text-xs'>
                 (₹{avgBuyPrice.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })})
             </span>
             {livePrice !== null && (
@@ -60,10 +60,10 @@ const HoldingCurrentValue: React.FC<{ symbol: string; quantity: number; fallback
 
     return (
         <div className='flex flex-col items-center'>
-            <span className={livePrice === null ? 'text-gray-400' : livePrice > fallbackPrice ? 'text-green-400' : livePrice < fallbackPrice ? 'text-red-400' : 'text-yellow-400'}>
+            <span className={livePrice === null ? 'text-gray-100' : livePrice > fallbackPrice ? 'text-green-400' : livePrice < fallbackPrice ? 'text-red-400' : 'text-yellow-400'}>
                 ₹{currentValue.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </span>
-            <span className='text-gray-500 text-xs'>(₹{totalInvested.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })})</span>
+            <span className='text-gray-100 text-xs'>(₹{totalInvested.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })})</span>
             <ProfitLossDisplay currentValue={currentValue} investedValue={totalInvested} />
         </div>
     );
@@ -413,7 +413,7 @@ export const ViewPortfolioDetails = () => {
                                             <td className='py-4 text-center text-white'>
                                                 <LivePriceWithPL symbol={holding.symbol} avgBuyPrice={holding.avg_buy_price} />
                                             </td>
-                                            <td className='px-6 py-4 text-center text-gray-400 font-medium'>
+                                            <td className='px-6 py-4 text-center text-gray-100 font-medium'>
                                                 <HoldingCurrentValue
                                                     symbol={holding.symbol}
                                                     quantity={holding.quantity}
