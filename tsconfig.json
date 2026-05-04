@@ -11,11 +11,11 @@
     "noEmit": false,
     "jsx": "react-jsx",
     "strict": true,
+    "ignoreDeprecations": "6.0",
+    "forceConsistentCasingInFileNames": true,
     "baseUrl": ".",
     "paths": {
-      "@/components/*": ["src/components/*"],
-      "@/pages/*": ["src/pages/*"],
-      "@/api/*": ["src/api/*"]
+      "@/*": ["src/*"]
     }
   },
   "include": ["src"]
